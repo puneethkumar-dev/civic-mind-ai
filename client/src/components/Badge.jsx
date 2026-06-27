@@ -11,6 +11,7 @@ export default function Badge({
     'Assigned': 'bg-amber-50 text-amber-700 border-amber-200/60',
     'In Progress': 'bg-indigo-50 text-indigo-600 border-indigo-200/50',
     'Resolved': 'bg-emerald-50 text-emerald-700 border-emerald-200/60',
+    'Community Verified': 'bg-emerald-500 text-white border-emerald-600 font-semibold shadow-sm',
     
     // Priorities
     'Low': 'bg-slate-100 text-slate-600 border-slate-200/60',

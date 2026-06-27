@@ -119,13 +119,24 @@ export function AuthProvider({ children }) {
 
   const clearError = () => setError(null);
 
-  const loginDeveloperMock = async (role = 'citizen') => {
+  const loginDeveloperMock = async (role = 'citizen', customName = null) => {
     setError(null);
     setLoading(true);
     try {
-      const mockUid = role === 'admin' ? 'mock-admin-uid-123' : 'mock-citizen-uid-456';
-      const mockEmail = role === 'admin' ? 'admin@civicmind.gov' : 'citizen@civicmind.org';
-      const mockDisplayName = role === 'admin' ? 'Admin Officer' : 'Lakshmi Prasad';
+      let mockUid = role === 'admin' ? 'mock-admin-uid-123' : 'mock-citizen-uid-456';
+      let mockDisplayName = role === 'admin' ? 'Admin Officer' : 'Lakshmi Prasad';
+      let mockEmail = role === 'admin' ? 'admin@civicmind.gov' : 'citizen@civicmind.org';
+
+      if (role === 'citizen' && customName) {
+        mockDisplayName = customName;
+        if (customName === 'Vikas Shah') {
+          mockUid = 'mock-citizen-uid-789';
+          mockEmail = 'vikas@civicmind.org';
+        } else if (customName === 'Karan Malhotra') {
+          mockUid = 'mock-citizen-uid-321';
+          mockEmail = 'karan@civicmind.org';
+        }
+      }
       
       const mockUser = {
         uid: mockUid,

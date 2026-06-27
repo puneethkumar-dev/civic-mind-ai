@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import admin from 'firebase-admin';
 import { runAIDecisionPipeline } from './services/aiService.js';
+import { calculatePriorityScore } from './services/priorityScore.js';
 
 dotenv.config();
 
@@ -202,13 +203,23 @@ app.post('/api/analyze', async (req, res) => {
     const currentTimeline = issue.timeline || [];
     const updatedTimeline = [...currentTimeline, ...newTimelineEntries];
 
+    const initialScore = calculatePriorityScore(result.severity, 0, 0, issue.createdAt || new Date());
+
     // Lifecycle status update: Reported -> AI Verified (only if exists in Firestore)
     if (issueExists) {
       await issueRef.update({
         aiAnalysis,
         timeline: updatedTimeline,
         status: 'AI Verified',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        // Module 5 Fields
+        verificationCount: 0,
+        verifiedUsers: [],
+        supportCount: 0,
+        supportedUsers: [],
+        priorityScore: initialScore,
+        communityVerified: false,
+        lastUpdated: new Date().toISOString()
       });
     } else {
       console.log(`[AI Pipeline] Local testing: Skipped Firestore write for local issue "${issueId}".`);
@@ -220,13 +231,217 @@ app.post('/api/analyze', async (req, res) => {
       data: {
         lowConfidence: false,
         aiAnalysis,
-        timeline: updatedTimeline
+        timeline: updatedTimeline,
+        // Include initial Module 5 fields
+        verificationCount: 0,
+        verifiedUsers: [],
+        supportCount: 0,
+        supportedUsers: [],
+        priorityScore: initialScore,
+        communityVerified: false
       }
     });
 
   } catch (error) {
     console.error('[AI Pipeline] Server exception:', error);
     res.status(500).json({ success: false, message: 'Server failed to process the AI analysis pipeline.', error: error.message });
+  }
+});
+
+// Community verification endpoint
+app.post('/api/issues/:issueId/verify', async (req, res) => {
+  const { issueId } = req.params;
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: 'Missing userId parameter.' });
+  }
+
+  if (!db) {
+    return res.status(500).json({ success: false, message: 'Firebase Database is not connected on the server.' });
+  }
+
+  try {
+    const issueRef = db.collection('issues').doc(issueId);
+    let docSnap = null;
+    let issueExists = false;
+
+    try {
+      docSnap = await issueRef.get();
+      issueExists = docSnap.exists;
+    } catch (e) {
+      console.warn('[Verify API] Firestore connection unavailable. Proceeding in local mock mode.');
+    }
+
+    let issue;
+    if (issueExists && docSnap) {
+      issue = docSnap.data();
+    } else {
+      // Fallback details from client request body
+      issue = {
+        issueId,
+        reportedBy: req.body.reportedBy || { uid: 'mock-reporter-uid' },
+        verificationCount: req.body.verificationCount || 0,
+        verifiedUsers: req.body.verifiedUsers || [],
+        supportCount: req.body.supportCount || 0,
+        supportedUsers: req.body.supportedUsers || [],
+        aiAnalysis: req.body.aiAnalysis || { severity: 'Medium' },
+        timeline: req.body.timeline || [],
+        createdAt: req.body.createdAt || new Date().toISOString()
+      };
+    }
+
+    // Validations:
+    // 1. Prevent users from verifying their own reports
+    const reporterUid = issue.reportedBy?.uid || '';
+    if (reporterUid === userId) {
+      return res.status(400).json({ success: false, message: 'You cannot verify your own report.' });
+    }
+
+    // 2. Prevent duplicate verifications
+    const verifiedUsers = issue.verifiedUsers || [];
+    if (verifiedUsers.includes(userId)) {
+      return res.status(400).json({ success: false, message: 'You have already verified this report.' });
+    }
+
+    // Record verification details
+    const newVerifiedUsers = [...verifiedUsers, userId];
+    const newVerificationCount = newVerifiedUsers.length;
+    let communityVerified = issue.communityVerified || false;
+    const newTimeline = [...(issue.timeline || [])];
+
+    if (newVerificationCount >= 3 && !communityVerified) {
+      communityVerified = true;
+      newTimeline.push({
+        title: 'Community Verified',
+        description: 'This issue has been verified by 3 nearby community members.',
+        actor: 'Community',
+        timestamp: new Date().toISOString(),
+        icon: 'ShieldCheck'
+      });
+    }
+
+    // Recalculate score
+    const severity = issue.aiAnalysis?.severity || 'Medium';
+    const newPriorityScore = calculatePriorityScore(
+      severity,
+      newVerificationCount,
+      issue.supportCount || 0,
+      issue.createdAt
+    );
+
+    const updateData = {
+      verificationCount: newVerificationCount,
+      verifiedUsers: newVerifiedUsers,
+      communityVerified,
+      priorityScore: newPriorityScore,
+      timeline: newTimeline,
+      lastUpdated: new Date().toISOString()
+    };
+
+    if (issueExists) {
+      await issueRef.update(updateData);
+    } else {
+      console.log(`[Verify API] Local testing: Skipped Firestore write for local issue "${issueId}".`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Issue verification recorded successfully.',
+      data: {
+        issueId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('[Verify API] Server exception:', error);
+    res.status(500).json({ success: false, message: 'Server failed to process verification request.', error: error.message });
+  }
+});
+
+// Community support / upvote endpoint
+app.post('/api/issues/:issueId/support', async (req, res) => {
+  const { issueId } = req.params;
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: 'Missing userId parameter.' });
+  }
+
+  if (!db) {
+    return res.status(500).json({ success: false, message: 'Firebase Database is not connected on the server.' });
+  }
+
+  try {
+    const issueRef = db.collection('issues').doc(issueId);
+    let docSnap = null;
+    let issueExists = false;
+
+    try {
+      docSnap = await issueRef.get();
+      issueExists = docSnap.exists;
+    } catch (e) {
+      console.warn('[Support API] Firestore connection unavailable. Proceeding in local mock mode.');
+    }
+
+    let issue;
+    if (issueExists && docSnap) {
+      issue = docSnap.data();
+    } else {
+      issue = {
+        issueId,
+        verificationCount: req.body.verificationCount || 0,
+        supportCount: req.body.supportCount || 0,
+        supportedUsers: req.body.supportedUsers || [],
+        aiAnalysis: req.body.aiAnalysis || { severity: 'Medium' },
+        createdAt: req.body.createdAt || new Date().toISOString()
+      };
+    }
+
+    // Validation: Prevent duplicate upvotes
+    const supportedUsers = issue.supportedUsers || [];
+    if (supportedUsers.includes(userId)) {
+      return res.status(400).json({ success: false, message: 'You have already supported this report.' });
+    }
+
+    const newSupportedUsers = [...supportedUsers, userId];
+    const newSupportCount = newSupportedUsers.length;
+
+    // Recalculate score
+    const severity = issue.aiAnalysis?.severity || 'Medium';
+    const newPriorityScore = calculatePriorityScore(
+      severity,
+      issue.verificationCount || 0,
+      newSupportCount,
+      issue.createdAt
+    );
+
+    const updateData = {
+      supportCount: newSupportCount,
+      supportedUsers: newSupportedUsers,
+      priorityScore: newPriorityScore,
+      lastUpdated: new Date().toISOString()
+    };
+
+    if (issueExists) {
+      await issueRef.update(updateData);
+    } else {
+      console.log(`[Support API] Local testing: Skipped Firestore write for local issue "${issueId}".`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Issue support recorded successfully.',
+      data: {
+        issueId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('[Support API] Server exception:', error);
+    res.status(500).json({ success: false, message: 'Server failed to process support request.', error: error.message });
   }
 });
 

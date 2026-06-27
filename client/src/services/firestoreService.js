@@ -15,6 +15,7 @@ const getLocalIssues = () => {
 const saveLocalIssues = (issues) => {
   try {
     localStorage.setItem('civicmind_local_issues', JSON.stringify(issues));
+    window.dispatchEvent(new Event('civicmind_local_issues_updated'));
   } catch (e) {
     console.error('Error writing local storage issues:', e);
   }

@@ -81,18 +81,36 @@ export default function Login() {
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                id="dev-login-citizen"
-                onClick={() => loginDeveloperMock('citizen')}
-                className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none"
+                id="dev-login-citizen-1"
+                onClick={() => loginDeveloperMock('citizen', 'Lakshmi Prasad')}
+                className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none text-left px-3"
               >
-                👤 Developer Citizen Sign In
+                👤 Lakshmi Prasad (Citizen 1)
+              </button>
+
+              <button
+                type="button"
+                id="dev-login-citizen-2"
+                onClick={() => loginDeveloperMock('citizen', 'Vikas Shah')}
+                className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none text-left px-3"
+              >
+                👤 Vikas Shah (Citizen 2)
+              </button>
+
+              <button
+                type="button"
+                id="dev-login-citizen-3"
+                onClick={() => loginDeveloperMock('citizen', 'Karan Malhotra')}
+                className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none text-left px-3"
+              >
+                👤 Karan Malhotra (Citizen 3)
               </button>
 
               <button
                 type="button"
                 id="dev-login-admin"
                 onClick={() => loginDeveloperMock('admin')}
-                className="w-full py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none"
+                className="w-full py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none text-left px-3"
               >
                 🏢 Developer Admin Sign In
               </button>
