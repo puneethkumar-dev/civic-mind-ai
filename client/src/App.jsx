@@ -1,8 +1,93 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import AppLayout from './layouts/AppLayout';
+import Landing from './pages/Landing';
+import Login from './pages/Login';
+import Home from './pages/Home';
+import ReportIssue from './pages/ReportIssue';
+import Timeline from './pages/Timeline';
+import CommunityMap from './pages/CommunityMap';
+import Profile from './pages/Profile';
+import AdminDashboard from './pages/AdminDashboard';
+import NotFound from './pages/NotFound';
+
+function AppContent() {
+  const { user } = useAuth();
+
+  // Route guard helper
+  const ProtectedRoute = ({ children, requireAdmin = false }) => {
+    if (!user) {
+      return <Navigate to="/login" replace />;
+    }
+    if (requireAdmin && user.role !== 'admin') {
+      return <Navigate to="/home" replace />;
+    }
+    return children;
+  };
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<AppLayout />}>
+          {/* Public Routes */}
+          <Route path="/" element={user ? <Navigate to="/home" replace /> : <Landing />} />
+          <Route 
+            path="/login" 
+            element={
+              user 
+                ? <Navigate to={user.role === 'admin' ? '/admin' : '/home'} replace /> 
+                : <Login />
+            } 
+          />
+          
+          {/* Protected Citizen Routes */}
+          <Route path="/home" element={
+            <ProtectedRoute>
+              <Home user={user} />
+            </ProtectedRoute>
+          } />
+          <Route path="/report" element={
+            <ProtectedRoute>
+              <ReportIssue />
+            </ProtectedRoute>
+          } />
+          <Route path="/timeline" element={
+            <ProtectedRoute>
+              <Timeline />
+            </ProtectedRoute>
+          } />
+          <Route path="/map" element={
+            <ProtectedRoute>
+              <CommunityMap />
+            </ProtectedRoute>
+          } />
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          } />
+
+          {/* Protected Admin Routes */}
+          <Route path="/admin" element={
+            <ProtectedRoute requireAdmin>
+              <AdminDashboard />
+            </ProtectedRoute>
+          } />
+
+          {/* 404 Route */}
+          <Route path="/404" element={<NotFound />} />
+          <Route path="*" element={<Navigate to="/404" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
 function App() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-blue-600">
-      <h1 className="text-4xl font-bold text-white">CivicMind AI 🚀</h1>
-    </div>
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 

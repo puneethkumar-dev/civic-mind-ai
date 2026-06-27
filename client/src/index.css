@@ -1,1 +1,60 @@
 @import "tailwindcss";
+
+@theme {
+  /* Premium Palette */
+  --color-primary-blue: #2563eb;
+  --color-primary-dark: #1d4ed8;
+  --color-primary-light: #eff6ff;
+  
+  --color-success-green: #10b981;
+  --color-success-dark: #047857;
+  --color-success-light: #ecfdf5;
+
+  --color-warning-orange: #f59e0b;
+  --color-warning-dark: #b45309;
+  --color-warning-light: #fffbeb;
+
+  --color-danger-red: #ef4444;
+  --color-danger-dark: #b91c1c;
+  --color-danger-light: #fef2f2;
+
+  --color-brand-bg: #f8fafc;
+  --color-card-white: #ffffff;
+
+  /* Typography */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-title: "Outfit", var(--font-sans);
+
+  /* Shadows and Rounding */
+  --shadow-premium: 0 10px 30px -10px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.02);
+  --shadow-button: 0 4px 12px -2px rgba(37, 99, 235, 0.25);
+  
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Custom Base / Utility Styles */
+@layer base {
+  html, body, #root {
+    @apply h-full font-sans bg-brand-bg text-slate-800 antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-title font-semibold tracking-tight text-slate-900;
+  }
+}
+
+/* Glassmorphism utility */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* Hide scrollbar but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
