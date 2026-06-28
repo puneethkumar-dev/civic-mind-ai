@@ -40,7 +40,7 @@ export function AuthProvider({ children }) {
     return error.message || 'An unexpected error occurred during authentication. Please try again.';
   };
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (requestedRole = null) => {
     if (!isInitialized) {
       setError(`Authentication is unavailable: ${initError?.message || 'Firebase not initialized.'}`);
       return;
@@ -56,12 +56,24 @@ export function AuthProvider({ children }) {
     try {
       const fbUser = await loginWithGoogleService();
       const userDoc = await getOrCreateUserDoc(fbUser);
+      
+      let finalRole = userDoc.role || 'citizen';
+      if (requestedRole && requestedRole !== userDoc.role) {
+        finalRole = requestedRole;
+        try {
+          const userDocRef = doc(db, 'users', fbUser.uid);
+          await updateDoc(userDocRef, { role: requestedRole });
+        } catch (dbErr) {
+          console.warn('Could not update role in Firestore, using selected role in state:', dbErr.message);
+        }
+      }
+
       setUser({
         uid: fbUser.uid,
         displayName: fbUser.displayName || userDoc.displayName || 'Citizen',
         email: fbUser.email,
         photoURL: fbUser.photoURL || userDoc.photoURL || '',
-        role: userDoc.role || 'citizen',
+        role: finalRole,
         points: userDoc.points !== undefined ? userDoc.points : 0,
         badges: userDoc.badges || [],
       });

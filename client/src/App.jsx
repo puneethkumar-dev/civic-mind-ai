@@ -43,27 +43,27 @@ function AppContent() {
           {/* Protected Citizen Routes */}
           <Route path="/home" element={
             <ProtectedRoute>
-              <Home user={user} />
+              <Home user={user} defaultTab="Dashboard" />
             </ProtectedRoute>
           } />
           <Route path="/report" element={
             <ProtectedRoute>
-              <ReportIssue />
+              <Home user={user} defaultTab="Report Issue" />
             </ProtectedRoute>
           } />
           <Route path="/timeline" element={
             <ProtectedRoute>
-              <Timeline />
+              <Home user={user} defaultTab="My Reports" />
             </ProtectedRoute>
           } />
           <Route path="/map" element={
             <ProtectedRoute>
-              <CommunityMap />
+              <Home user={user} defaultTab="Community Map" />
             </ProtectedRoute>
           } />
           <Route path="/profile" element={
             <ProtectedRoute>
-              <Profile />
+              <Home user={user} defaultTab="Profile & Leaderboard" />
             </ProtectedRoute>
           } />
 

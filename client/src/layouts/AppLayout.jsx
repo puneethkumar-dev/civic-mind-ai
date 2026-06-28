@@ -11,7 +11,7 @@ export default function AppLayout() {
   const { user, loading, logout, isOffline } = useAuth();
   const location = useLocation();
 
-  const isNoNavPage = ['/', '/login'].includes(location.pathname) || location.pathname.startsWith('/404');
+  const isNoNavPage = ['/', '/login', '/admin', '/home', '/report', '/timeline', '/map', '/profile'].includes(location.pathname) || location.pathname.startsWith('/404');
 
   if (loading) {
     return (
@@ -43,7 +43,7 @@ export default function AppLayout() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.18, ease: "easeInOut" }}
-            className="flex-1 flex flex-col w-full max-w-7xl mx-auto px-4 sm:px-6 py-6"
+            className={`flex-1 flex flex-col w-full ${isNoNavPage ? '' : 'max-w-7xl mx-auto px-4 sm:px-6 py-6'}`}
           >
             <Outlet />
           </motion.div>
