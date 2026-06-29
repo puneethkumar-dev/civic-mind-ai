@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useFirestoreListener } from '../hooks/useFirestoreListener';
 import { MapPin, Layers } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
@@ -6,16 +8,68 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 
 export default function CommunityMap() {
+  const navigate = useNavigate();
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [selectedPin, setSelectedPin] = useState(null);
 
-  const pins = [
-    { id: 1, x: 25, y: 35, title: 'Broken Water Pipe', category: 'Water', address: 'MG Road, Sector 4', status: 'In Progress', priority: 'High', description: 'Spraying water on sidewalk.' },
-    { id: 2, x: 55, y: 20, title: 'Massive Pothole', category: 'Roads', address: 'Indiranagar Main Rd', status: 'AI Analysis', priority: 'High', description: 'Deep cavity causing vehicle tire bursts.' },
-    { id: 3, x: 75, y: 65, title: 'Overflowing Garbage Bin', category: 'Garbage', address: 'Commercial Street Corner', status: 'Resolved', priority: 'Low', description: 'Trash pile on street walk.' },
-    { id: 4, x: 35, y: 70, title: 'Broken Lamp Post', category: 'Streetlights', address: 'Gandhi Nagar St 3', status: 'Assigned', priority: 'Medium', description: 'Complete blackout in the corner lane.' },
-    { id: 5, x: 80, y: 30, title: 'Clogged Drainage', category: 'Water', address: '12th Main Rd, Sector A', status: 'In Progress', priority: 'Critical', description: 'Rainwater overflowing into nearby basements.' },
-  ];
+  const allReports = useFirestoreListener();
+
+  // Mapping categories from Firestore to map filter/pin categories
+  const categoryMap = {
+    'Water Leakage': 'Water',
+    'Drainage': 'Water',
+    'Road Damage': 'Roads',
+    'Public Property Damage': 'Roads',
+    'Garbage': 'Garbage',
+    'Illegal Dumping': 'Garbage',
+    'Streetlight': 'Streetlights'
+  };
+
+  const getPinCategory = (category) => {
+    return categoryMap[category] || 'Roads';
+  };
+
+  const minLat = 12.95;
+  const maxLat = 12.99;
+  const minLng = 77.56;
+  const maxLng = 77.65;
+
+  const getCanvasCoords = (location, index) => {
+    if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+      // Deterministic positions as fallback using the index
+      return {
+        x: 20 + (index * 17) % 65,
+        y: 20 + (index * 23) % 60
+      };
+    }
+    
+    // Normalize lat, lng into 10% to 90% space so they don't go off the edges
+    let pctX = ((location.longitude - minLng) / (maxLng - minLng)) * 80 + 10;
+    let pctY = (1 - (location.latitude - minLat) / (maxLat - minLat)) * 80 + 10; // invert latitude for screen y
+    
+    // Bound to [5, 95]
+    pctX = Math.max(5, Math.min(95, pctX));
+    pctY = Math.max(5, Math.min(95, pctY));
+    
+    return { x: pctX, y: pctY };
+  };
+
+  const pins = allReports.map((report, idx) => {
+    const coords = getCanvasCoords(report.location, idx);
+    const cat = getPinCategory(report.aiAnalysis?.category || report.category);
+    return {
+      id: report.issueId,
+      x: coords.x,
+      y: coords.y,
+      title: report.aiAnalysis?.summary || report.description?.substring(0, 30) || 'Quick Report',
+      category: cat,
+      address: report.location?.address || 'Unknown coordinates',
+      status: report.status || 'Reported',
+      priority: report.aiAnalysis?.severity || 'Medium',
+      description: report.description || 'No notes provided.',
+      rawReport: report
+    };
+  });
 
   const filteredPins = selectedFilter === 'All' 
     ? pins 
@@ -142,7 +196,7 @@ export default function CommunityMap() {
                 variant="primary"
                 size="md"
                 className="w-full flex items-center justify-center gap-1 text-xs"
-                onClick={() => alert(`Map Demo: Opening details of ${selectedPin.title}`)}
+                onClick={() => navigate(`/timeline?id=${selectedPin.id}`)}
               >
                 Inspect Timeline details
               </Button>

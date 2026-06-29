@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
+import { useFirestoreListener } from '../hooks/useFirestoreListener';
+import { collection, getDocs, doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { db, auth } from '../services/firebaseConfig';
 import { 
   LayoutDashboard,
   Clock,
@@ -34,6 +37,7 @@ import {
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import bgImage from '../assets/hero_skyline_background.png';
+import LoadingState from '../components/LoadingState';
 
 export default function AdminDashboard() {
   const { logout } = useAuth();
@@ -43,30 +47,181 @@ export default function AdminDashboard() {
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterPriority, setFilterPriority] = useState('All');
+  const [sortByConfidence, setSortByConfidence] = useState(false);
 
-  // Default Stats Mockup
+  const allIssues = useFirestoreListener();
+
+  const [insights, setInsights] = useState(null);
+  const [loadingInsights, setLoadingInsights] = useState(true);
+
+  // Fetch real-time AI insights based on current issues
+  useEffect(() => {
+    const fetchInsights = async () => {
+      try {
+        setLoadingInsights(true);
+        const token = await auth.currentUser?.getIdToken();
+        const response = await fetch('http://localhost:5000/api/admin/insights', {
+          headers: {
+            'Authorization': `Bearer ${token || 'mock-admin'}`
+          }
+        });
+        const data = await response.json();
+        if (data.success) {
+          setInsights(data.data);
+        }
+      } catch (err) {
+        console.warn('[AdminDashboard] Error fetching insights:', err.message);
+      } finally {
+        setLoadingInsights(false);
+      }
+    };
+
+    if (allIssues && allIssues.length > 0) {
+      fetchInsights();
+    }
+  }, [allIssues]);
+  
+  // Dynamic Citizens list state
+  const [citizens, setCitizens] = useState([
+    { name: 'Lakshmi Prasad', email: 'lakshmi@civicmind.org', reports: 5, points: 120, badge: 'Lead Reporter' },
+    { name: 'Vikas Shah', email: 'vikas@civicmind.org', reports: 3, points: 70, badge: 'Street Guard' },
+    { name: 'Karan Malhotra', email: 'karan@civicmind.org', reports: 2, points: 45, badge: 'Helper' }
+  ]);
+
+  // Load citizens from Firestore "users" collection
+  useEffect(() => {
+    const fetchCitizens = async () => {
+      try {
+        if (db) {
+          const snapshot = await getDocs(collection(db, 'users'));
+          const list = [];
+          snapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.role !== 'admin') {
+              list.push({
+                name: data.displayName || 'Citizen',
+                email: data.email || 'citizen@civicmind.org',
+                reports: allIssues.filter(i => i.reportedBy?.uid === data.uid).length,
+                points: data.points || 0,
+                badge: data.badges?.[0] || (data.points >= 100 ? 'Lead Reporter' : data.points >= 50 ? 'Street Guard' : 'Helper')
+              });
+            }
+          });
+          if (list.length > 0) {
+            setCitizens(list);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch citizens from database, using fallback:', err.message);
+      }
+    };
+    fetchCitizens();
+  }, [allIssues]);
+
+  // Status transitions handler
+  const handleUpdateStatus = async (issueId, newStatus) => {
+    try {
+      const issueRef = doc(db, 'issues', issueId);
+      const timelineEntry = {
+        title: newStatus === 'In Progress' ? 'Work Started' : newStatus === 'Resolved' ? 'Resolved' : 'Assigned',
+        description: `Ticket status transitioned to ${newStatus} by Admin Officer.`,
+        actor: 'Admin Officer',
+        timestamp: new Date().toISOString()
+      };
+      await updateDoc(issueRef, {
+        status: newStatus,
+        timeline: arrayUnion(timelineEntry),
+        updatedAt: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Failed to update ticket status:', error);
+      alert('Error updating status: ' + error.message);
+    }
+  };
+
+  const handleManageTicket = async (issue) => {
+    const nextStatuses = {
+      'Reported': 'Assigned',
+      'AI Verified': 'Assigned',
+      'Awaiting Clarification': 'Assigned',
+      'Assigned': 'In Progress',
+      'In Progress': 'Resolved',
+      'Resolved': 'AI Verified'
+    };
+    const next = nextStatuses[issue.status] || 'Assigned';
+    const confirm = window.confirm(`Transition ticket ${issue.id} from "${issue.status}" to "${next}"?`);
+    if (confirm) {
+      await handleUpdateStatus(issue.issueId, next);
+    }
+  };
+
+  // Compute live statistics
+  const totalCount = allIssues.length;
+  const awaitingCount = allIssues.filter(i => i.status === 'Reported' || i.status === 'AI Verified' || i.status === 'Awaiting Clarification').length;
+  const inProgressCount = allIssues.filter(i => i.status === 'In Progress' || i.status === 'Assigned').length;
+  const resolvedCount = allIssues.filter(i => i.status === 'Resolved').length;
+
   const stats = [
-    { title: 'Total Reports', value: '142', icon: BarChart3, trend: '↑ 14% this week', trendColor: 'text-emerald-500', lineColor: '#a855f7' },
-    { title: 'Awaiting Action', value: '18', icon: Clock, trend: '↓ 8% from last week', trendColor: 'text-emerald-500', lineColor: '#3b82f6' },
-    { title: 'Work In Progress', value: '34', icon: ClipboardCheck, trend: '• Stable', trendColor: 'text-blue-500', lineColor: '#8b5cf6' },
-    { title: 'Resolved (Monthly)', value: '90', icon: CheckCircle, trend: '↑ 22% from last month', trendColor: 'text-emerald-500', lineColor: '#10b981' },
+    { title: 'Total Reports', value: String(totalCount), icon: BarChart3, trend: 'Live Telemetry', trendColor: 'text-emerald-500', lineColor: '#a855f7' },
+    { title: 'Awaiting Action', value: String(awaitingCount), icon: Clock, trend: 'Needs Dispatch', trendColor: 'text-amber-500', lineColor: '#3b82f6' },
+    { title: 'Work In Progress', value: String(inProgressCount), icon: ClipboardCheck, trend: 'Under Repair', trendColor: 'text-blue-500', lineColor: '#8b5cf6' },
+    { title: 'Resolved (All Time)', value: String(resolvedCount), icon: CheckCircle, trend: 'Completed Tasks', trendColor: 'text-emerald-500', lineColor: '#10b981' },
   ];
 
-  // Default Mock Issues
-  const recentIssues = [
-    { id: 'CM-9082', title: 'Major Water Leak on 4th Cross Road', reporter: 'Lakshmi Prasad', date: 'Today, 11:30 AM', priority: 'High', status: 'In Progress', dept: 'Water & Sanitation', img: 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?w=100&q=80' },
-    { id: 'CM-9079', title: 'Open Garbage Pile Near School', reporter: 'Vikas Shah', date: 'Today, 08:45 AM', priority: 'Critical', status: 'AI Analysis', dept: 'Health & Sanitation', img: 'https://images.unsplash.com/photo-1530587191325-3db32d826c18?w=100&q=80' },
-    { id: 'CM-8991', title: 'Broken Pavement Path', reporter: 'Karan Malhotra', date: 'Yesterday', priority: 'Low', status: 'Assigned', dept: 'Public Works', img: 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80' },
-    { id: 'CM-8901', title: 'Broken Streetlight', reporter: 'Ravi K.', date: 'June 23', priority: 'Medium', status: 'Resolved', dept: 'Electrical', img: 'https://images.unsplash.com/photo-1506546377750-be95ad2634e0?w=100&q=80' },
-  ];
+  // Helper to format timestamps to relative time strings
+  const formatTimeAgo = (timestamp) => {
+    if (!timestamp) return 'Recent';
+    const diffMs = Date.now() - new Date(timestamp).getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+  };
 
-  // Department Open queues list
+  const recentIssues = allIssues.map(issue => ({
+    id: issue.trackingId || 'CM-XXXX',
+    issueId: issue.issueId,
+    title: issue.aiAnalysis?.summary || issue.description || 'Quick Report',
+    reporter: issue.reportedBy?.displayName || 'Citizen',
+    date: formatTimeAgo(issue.createdAt),
+    priority: issue.aiAnalysis?.severity || 'Medium',
+    status: issue.status || 'Reported',
+    dept: issue.aiAnalysis?.department || 'Municipality',
+    img: issue.imageReference || 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80',
+    rawIssue: issue
+  }));
+
+  if (sortByConfidence) {
+    recentIssues.sort((a, b) => {
+      const confA = a.rawIssue?.verification?.confidence || 0;
+      const confB = b.rawIssue?.verification?.confidence || 0;
+      return confB - confA;
+    });
+  }
+
+  // Compute live department counts
+  const getDeptCount = (deptName) => allIssues.filter(i => (i.aiAnalysis?.department || i.department) === deptName && i.status !== 'Resolved').length;
+  const getDeptResolved = (deptName) => allIssues.filter(i => (i.aiAnalysis?.department || i.department) === deptName && i.status === 'Resolved').length;
+
   const departments = [
-    { name: 'Roads & Infrastructure', count: 12, resolved: 40, color: 'bg-blue-600', percent: 77 },
-    { name: 'Water & Sanitation', count: 8, resolved: 28, color: 'bg-blue-400', percent: 78 },
-    { name: 'Health & Sanitation', count: 15, resolved: 52, color: 'bg-amber-500', percent: 78 },
-    { name: 'Electrical & Lighting', count: 3, resolved: 18, color: 'bg-purple-500', percent: 86 },
+    { name: 'Roads & Infrastructure', count: getDeptCount('Roads & Infrastructure') || getDeptCount('Road Damage'), resolved: getDeptResolved('Roads & Infrastructure') || getDeptResolved('Road Damage'), color: 'bg-blue-600', percent: 80 },
+    { name: 'Water & Sanitation', count: getDeptCount('Water & Sanitation') || getDeptCount('Water Leakage'), resolved: getDeptResolved('Water & Sanitation') || getDeptResolved('Water Leakage'), color: 'bg-blue-400', percent: 75 },
+    { name: 'Health & Sanitation', count: getDeptCount('Health & Sanitation') || getDeptCount('Garbage') || getDeptCount('Illegal Dumping'), resolved: getDeptResolved('Health & Sanitation') || getDeptResolved('Garbage') || getDeptResolved('Illegal Dumping'), color: 'bg-amber-500', percent: 85 },
+    { name: 'Electrical & Lighting', count: getDeptCount('Electrical & Lighting') || getDeptCount('Streetlight'), resolved: getDeptResolved('Electrical & Lighting') || getDeptResolved('Streetlight'), color: 'bg-purple-500', percent: 90 },
   ];
+
+  // Adjust SLA percent based on actual count vs resolved
+  departments.forEach(dept => {
+    const total = dept.count + dept.resolved;
+    if (total > 0) {
+      dept.percent = Math.round((dept.resolved / total) * 100);
+    }
+  });
 
   // Sidebar Links styled with Mockup Icons
   const sidebarLinks = [
@@ -162,19 +317,34 @@ export default function AdminDashboard() {
                   <h3 className="text-xl font-extrabold text-slate-950 font-title">Reports Management Directory</h3>
                   <p className="text-sm text-slate-500 mt-0.5">Filter, audit, and transition live municipality reports.</p>
                 </div>
-                {/* Filter buttons */}
-                <div className="flex gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/50">
-                  {['All', 'High', 'Medium', 'Low'].map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setFilterPriority(p)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        filterPriority === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
+                {/* Sort & Filter buttons */}
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Sort by Confidence Toggle */}
+                  <button
+                    onClick={() => setSortByConfidence(!sortByConfidence)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                      sortByConfidence 
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                        : 'bg-white text-slate-650 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Sort by Confidence {sortByConfidence ? '✓' : ''}
+                  </button>
+
+                  {/* Filter Priority */}
+                  <div className="flex gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/50">
+                    {['All', 'High', 'Medium', 'Low'].map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setFilterPriority(p)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          filterPriority === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-850'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -202,6 +372,21 @@ export default function AdminDashboard() {
                             <div>
                               <h5 className="font-bold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors">{issue.title}</h5>
                               <p className="text-[10px] text-slate-400 mt-1">Ticket ID: {issue.id} • By {issue.reporter}</p>
+                              {/* Community Verification Indicators */}
+                              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100/30 flex items-center gap-0.5">
+                                  🤝 Confidence: {issue.rawIssue?.verification?.confidence !== undefined ? issue.rawIssue.verification.confidence : 0}%
+                                </span>
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-100/30 flex items-center gap-0.5">
+                                  👍 Verified: {issue.rawIssue?.verification?.upvotes || 0}
+                                </span>
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-50 text-rose-600 rounded border border-rose-100/30 flex items-center gap-0.5">
+                                  👎 Invalid: {issue.rawIssue?.verification?.downvotes || 0}
+                                </span>
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded border border-purple-100/30 flex items-center gap-0.5">
+                                  ⚡ Impact: {issue.rawIssue?.impactScore !== undefined ? issue.rawIssue.impactScore : 10}/100
+                                </span>
+                              </div>
                             </div>
                           </td>
                           <td className="py-4">
@@ -216,7 +401,7 @@ export default function AdminDashboard() {
                           <td className="py-4 text-right">
                             <button
                               className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm cursor-pointer select-none transition-colors"
-                              onClick={() => alert(`Admin Action: Dispatching ticket ${issue.id}`)}
+                              onClick={() => handleManageTicket(issue)}
                             >
                               Dispatch Task
                             </button>
@@ -292,11 +477,7 @@ export default function AdminDashboard() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-4">
-                {[
-                  { name: 'Lakshmi Prasad', email: 'lakshmi@civicmind.org', reports: 5, points: 120, badge: 'Lead Reporter' },
-                  { name: 'Vikas Shah', email: 'vikas@civicmind.org', reports: 3, points: 70, badge: 'Sreet Guard' },
-                  { name: 'Karan Malhotra', email: 'karan@civicmind.org', reports: 2, points: 45, badge: 'Helper' }
-                ].map((citizen, idx) => (
+                {citizens.map((citizen, idx) => (
                   <div key={idx} className="p-5 bg-white border border-slate-100 shadow-sm rounded-2xl space-y-4 hover:border-blue-500/20 transition-all text-left">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center font-bold text-blue-600 text-sm">
@@ -390,32 +571,57 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 text-left select-none">
-                <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase">Routing Precision</span>
-                  <h4 className="text-2xl font-black text-slate-800 mt-1">99.4%</h4>
-                  <p className="text-[9px] text-slate-400 mt-1">Tickets routed with zero manual touches.</p>
+              {loadingInsights ? (
+                <div className="flex items-center justify-center py-12">
+                  <LoadingState type="spinner" className="scale-110" />
                 </div>
-                <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase">Duplicate Savings</span>
-                  <h4 className="text-2xl font-black text-slate-800 mt-1">2,300+</h4>
-                  <p className="text-[9px] text-slate-400 mt-1">Tickets consolidated dynamically.</p>
-                </div>
-                <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase">Avg Response Reduction</span>
-                  <h4 className="text-2xl font-black text-slate-800 mt-1">-34%</h4>
-                  <p className="text-[9px] text-slate-400 mt-1">Dispatches sent inside 4.2 seconds.</p>
-                </div>
-              </div>
+              ) : insights ? (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 text-left select-none">
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Routing Precision</span>
+                      <h4 className="text-2xl font-black text-slate-800 mt-1">99.4%</h4>
+                      <p className="text-[9px] text-slate-400 mt-1">Tickets routed with zero manual touches.</p>
+                    </div>
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Hotspot concentration</span>
+                      <h4 className="text-2xl font-black text-rose-600 mt-1 flex items-center gap-1">
+                        🔥 {insights.hotspot || 'N/A'}
+                      </h4>
+                      <p className="text-[9px] text-slate-400 mt-1">Highest density of reports logged.</p>
+                    </div>
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Busy Department</span>
+                      <h4 className="text-2xl font-black text-blue-650 mt-1 line-clamp-1">
+                        🏢 {insights.mostBusyDepartment || 'Roads'}
+                      </h4>
+                      <p className="text-[9px] text-slate-400 mt-1">Receiving the highest task volume.</p>
+                    </div>
+                  </div>
 
-              <div className="bg-slate-50 p-4 border border-slate-100 rounded-2xl mt-4">
-                <h4 className="font-extrabold text-sm text-slate-900 font-title flex items-center gap-1.5">
-                  <Info className="w-4 h-4 text-blue-500 shrink-0" /> Dynamic Actionable Alert
-                </h4>
-                <p className="text-xs text-slate-650 leading-relaxed mt-2.5">
-                  Gemini analysis has detected a clustering of water leakage complaints within Sector 4 over the last 48 hours. AI pipeline recommends grouping inspections into a unified local work ticket.
-                </p>
-              </div>
+                  <div className="bg-gradient-to-br from-indigo-50/30 via-white to-slate-50/20 p-5 border border-indigo-100 rounded-2xl">
+                    <h4 className="font-extrabold text-sm text-indigo-900 font-title flex items-center gap-1.5">
+                      💡 AI Insights Recommendation
+                    </h4>
+                    <p className="text-xs text-slate-650 leading-relaxed mt-2.5 font-medium">
+                      {insights.recommendation}
+                    </p>
+                  </div>
+
+                  <div className="bg-blue-50/10 p-5 border border-blue-100/50 rounded-2xl">
+                    <h4 className="font-extrabold text-sm text-blue-900 font-title flex items-center gap-1.5">
+                      📈 City-Level Trend Analysis
+                    </h4>
+                    <p className="text-xs text-slate-650 leading-relaxed mt-2.5 font-medium">
+                      {insights.trend || insights.summary}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-10 text-slate-400 font-semibold text-xs">
+                  Failed to generate AI Insights.
+                </div>
+              )}
             </Card>
           </div>
         );
@@ -570,6 +776,21 @@ export default function AdminDashboard() {
                               <div>
                                 <h5 className="font-bold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors">{issue.title}</h5>
                                 <p className="text-[10px] text-slate-400 mt-1">By {issue.reporter} • {issue.date}</p>
+                                {/* Community Verification Indicators */}
+                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100/30 flex items-center gap-0.5">
+                                    🤝 Confidence: {issue.rawIssue?.verification?.confidence !== undefined ? issue.rawIssue.verification.confidence : 0}%
+                                  </span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-100/30 flex items-center gap-0.5">
+                                    👍 Verified: {issue.rawIssue?.verification?.upvotes || 0}
+                                  </span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-50 text-rose-600 rounded border border-rose-100/30 flex items-center gap-0.5">
+                                    👎 Invalid: {issue.rawIssue?.verification?.downvotes || 0}
+                                  </span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded border border-purple-100/30 flex items-center gap-0.5">
+                                    ⚡ Impact: {issue.rawIssue?.impactScore !== undefined ? issue.rawIssue.impactScore : 10}/100
+                                  </span>
+                                </div>
                               </div>
                             </td>
                             <td className="py-4.5">
@@ -584,7 +805,7 @@ export default function AdminDashboard() {
                             <td className="py-4.5 text-right">
                               <button
                                 className="px-3.5 py-2 text-xs font-bold text-primary-blue bg-primary-light hover:bg-blue-100 rounded-xl border border-primary-blue/10 cursor-pointer select-none transition-all"
-                                onClick={() => alert(`Admin: Managing Ticket ID ${issue.id}`)}
+                                onClick={() => handleManageTicket(issue)}
                               >
                                 Manage &gt;
                               </button>
@@ -609,6 +830,149 @@ export default function AdminDashboard() {
 
               {/* Right Section: Performance Meters */}
               <div className="lg:col-span-5 space-y-6">
+                
+                {/* 🤖 CivicMind AI Municipal Intelligence Card */}
+                <Card className="p-6 border-2 border-indigo-150/60 bg-gradient-to-br from-indigo-50/20 via-white to-slate-50/30 shadow-premium rounded-3xl space-y-5 relative overflow-hidden ring-4 ring-indigo-50/15">
+                  <div className="absolute -right-8 -top-8 w-24 h-24 bg-indigo-200/10 rounded-full blur-xl pointer-events-none" />
+                  
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100/60">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100/30">
+                        <Sparkles className="w-4 h-4 animate-pulse" />
+                      </div>
+                      <h3 className="text-sm font-black uppercase text-slate-900 tracking-wider font-title">
+                        🤖 CivicMind AI Municipal Intelligence
+                      </h3>
+                    </div>
+                    <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 uppercase tracking-widest">
+                      Agent 7 Active
+                    </span>
+                  </div>
+
+                  {loadingInsights ? (
+                    <div className="flex items-center justify-center py-8">
+                      <LoadingState type="spinner" className="scale-75" />
+                    </div>
+                  ) : insights ? (
+                    <div className="space-y-4 text-xs font-semibold text-slate-700">
+                      
+                      {/* Executive Summary */}
+                      <div className="space-y-1 select-none">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Executive Summary</span>
+                        <p className="text-xs text-slate-600 leading-relaxed font-semibold">
+                          {insights.executiveSummary || insights.summary || "No active insights available."}
+                        </p>
+                      </div>
+
+                      {/* Current Situation */}
+                      <div className="space-y-1.5 select-none">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Current Situation</span>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">🔥 Hotspot Area</span>
+                            <span className="text-xs font-black text-slate-800 mt-1 block">
+                              {insights.hotspot || 'N/A'}
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">📈 Most Reported Category</span>
+                            <span className="text-xs font-black text-slate-800 mt-1 block">
+                              {insights.topCategory || 'N/A'}
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">⚠ Critical Issues Pending</span>
+                            <span className="text-xs font-black text-rose-600 mt-1 block">
+                              {insights.criticalIssues !== undefined ? insights.criticalIssues : 0} open
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">🏢 Busiest Department</span>
+                            <span className="text-xs font-black text-slate-800 mt-1 block">
+                              {insights.mostBusyDepartment || 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Community Health */}
+                      <div className="space-y-1.5 select-none">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Community Health</span>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="bg-slate-50 p-2 rounded-xl border border-slate-100/80 text-center flex flex-col justify-center">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Confidence</span>
+                            <span className="text-xs font-black text-indigo-600 mt-1 block">
+                              {insights.communityConfidence || '0%'}
+                            </span>
+                          </div>
+                          <div className="bg-slate-50 p-2 rounded-xl border border-slate-100/80 text-center flex flex-col justify-center">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Verification Rate</span>
+                            <span className="text-xs font-black text-emerald-600 mt-1 block">
+                              {insights.verificationRate || '0%'}
+                            </span>
+                          </div>
+                          <div className="bg-slate-50 p-2 rounded-xl border border-slate-100/80 text-center flex flex-col justify-center">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Resolved vs Pending</span>
+                            <span className="text-[10px] font-black text-slate-800 mt-0.5 block leading-tight">
+                              {insights.resolvedCount || 0}R : {insights.pendingCount || 0}P
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AI Recommendation */}
+                      <div className="bg-indigo-50/30 border border-indigo-100/40 p-3.5 rounded-2xl space-y-1.5 text-left">
+                        <span className="text-[9px] font-black text-indigo-700 uppercase tracking-wider block">💡 AI Recommendation</span>
+                        <p className="text-xs text-slate-650 leading-relaxed font-semibold">
+                          {insights.recommendation}
+                        </p>
+                      </div>
+
+                      {/* Trend Indicators */}
+                      <div className="space-y-1.5 select-none">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Trend Indicators</span>
+                        <div className="flex flex-wrap gap-1.5 text-[9px] font-bold">
+                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                            (insights.trend?.toLowerCase().includes('increase') || insights.executiveSummary?.toLowerCase().includes('increase') || insights.summary?.toLowerCase().includes('increase'))
+                              ? 'bg-amber-50 text-amber-700 border-amber-200 opacity-100'
+                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                          }`}>
+                            📈 Increasing
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                            (insights.trend?.toLowerCase().includes('decrease') || insights.executiveSummary?.toLowerCase().includes('decrease') || insights.summary?.toLowerCase().includes('decrease'))
+                              ? 'bg-blue-50 text-blue-700 border-blue-200 opacity-100'
+                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                          }`}>
+                            📉 Decreasing
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                            (insights.criticalIssues > 0)
+                              ? 'bg-rose-50 text-rose-700 border-rose-200 opacity-100'
+                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                          }`}>
+                            ⚠ Needs Attention
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                            (parseInt(insights.resolutionRate || '0') >= 50)
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 opacity-100'
+                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                          }`}>
+                            ✅ Improving
+                          </span>
+                        </div>
+                      </div>
+
+                    </div>
+                  ) : (
+                    <div className="text-center py-6 text-slate-400 font-semibold text-xs">
+                      Failed to load AI Insights.
+                    </div>
+                  )}
+                </Card>
                 
                 {/* Department performance */}
                 <Card className="p-6 border-slate-100/90 bg-white shadow-premium rounded-3xl space-y-6">

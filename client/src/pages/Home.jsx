@@ -185,7 +185,7 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
 
                 <button
                   onClick={() => navigate('/report')}
-                  className="px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-650 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-black shadow-lg shadow-blue-500/20 cursor-pointer select-none transition-all hover:scale-[1.01]"
+                  className="px-8 py-4 rounded-2xl bg-blue-600 hover:bg-blue-750 text-white text-sm font-black shadow-lg shadow-blue-500/20 cursor-pointer select-none transition-all hover:scale-[1.01]"
                 >
                   Report Incident Now (Takes 10s)
                 </button>

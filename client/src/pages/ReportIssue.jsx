@@ -1,10 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLocation } from '../hooks/useLocation';
 import { useSpeechToText } from '../hooks/useSpeechToText';
 import { storageService } from '../services/storageService';
 import { createIssueDoc, updateLocalIssue } from '../services/firestoreService';
+import { auth } from '../services/firebaseConfig';
 import { Camera, Image as ImageIcon, Mic, MicOff, CheckCircle2, Loader2, FileText, Home, Plus, RefreshCw, Sparkles, Brain, AlertTriangle } from 'lucide-react';
 import Button from '../components/Button';
 import Card from '../components/Card';
@@ -13,7 +14,7 @@ import PageHeader from '../components/PageHeader';
 
 export default function ReportIssue() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, updateUserPoints } = useAuth();
   
   const [step, setStep] = useState(1); // 1: Capture, 2: Review/Describe, 2.5: AI Pipeline, 3: Success
   const [selectedFile, setSelectedFile] = useState(null);
@@ -32,6 +33,74 @@ export default function ReportIssue() {
   
   const locationHook = useLocation();
   const speechHook = useSpeechToText();
+
+  // Camera capture integration
+  const [showCameraView, setShowCameraView] = useState(false);
+  const [cameraStream, setCameraStream] = useState(null);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [cameraStream]);
+
+  const handleCameraStart = async () => {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      setShowCameraView(true);
+      setTimeout(async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' },
+            audio: false
+          });
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            setCameraStream(stream);
+          }
+        } catch (err) {
+          console.error('Camera access error:', err);
+          alert('Camera permission denied or unavailable. Opening file manager instead.');
+          setShowCameraView(false);
+          triggerFileSelect(false);
+        }
+      }, 100);
+    } else {
+      triggerFileSelect(true);
+    }
+  };
+
+  const handleCameraCapture = () => {
+    if (videoRef.current && cameraStream) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth || 640;
+      canvas.height = videoRef.current.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], `camera_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            setSelectedFile(file);
+            setPreviewUrl(URL.createObjectURL(file));
+            setStep(2);
+            locationHook.fetchLocation();
+            handleCameraStop();
+          }
+        }, 'image/jpeg', 0.95);
+      }
+    }
+  };
+
+  const handleCameraStop = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+    setShowCameraView(false);
+  };
 
   const aiStages = [
     { name: 'Vision Agent', desc: 'Analyzing image details & identifying issue...' },
@@ -114,21 +183,25 @@ export default function ReportIssue() {
       // 3. Extract description text
       const descPayload = typeManually ? manualText : (speechHook.transcript || '');
 
-      // 4. Save document inside Firestore collection "issues"
-      const dbResult = await createIssueDoc({
-        imageReference: uploadRes.url,
-        description: descPayload,
-        location: locationPayload,
-      }, user);
+      // 4. Retrieve auth headers with ID token
+      const headers = { 'Content-Type': 'application/json' };
+      if (auth?.currentUser) {
+        try {
+          const token = await auth.currentUser.getIdToken();
+          headers['Authorization'] = `Bearer ${token}`;
+        } catch (e) {
+          console.warn('Failed to retrieve Firebase ID token, using fallback:', e);
+          headers['Authorization'] = `Bearer ${user?.uid || ''}`;
+        }
+      } else if (user?.uid) {
+        headers['Authorization'] = `Bearer ${user.uid}`;
+      }
 
-      setTrackingId(dbResult.trackingId);
-
-      // 5. Trigger backend Gemini decision pipeline with backup parameters for fail-safe fallback
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      // 5. POST to /api/issues directly on backend
+      const response = await fetch('http://localhost:5000/api/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ 
-          issueId: dbResult.issueId,
           description: descPayload,
           location: locationPayload,
           imageReference: uploadRes.url
@@ -142,11 +215,12 @@ export default function ReportIssue() {
         if (data.data.lowConfidence) {
           // Vision confidence is low! Trigger clarification screen
           setLowConfidenceData({
-            issueId: dbResult.issueId,
+            issueId: data.data.issueId,
             visualDescription: data.data.visualDescription
           });
-          // Update local status as well to show low confidence is pending
-          updateLocalIssue(dbResult.issueId, null, [
+          setTrackingId(data.data.trackingId);
+          // Sync offline local storage
+          updateLocalIssue(data.data.issueId, null, [
             {
               title: 'Reported',
               description: 'Issue reported by citizen.',
@@ -159,15 +233,39 @@ export default function ReportIssue() {
               actor: 'Vision Agent',
               timestamp: new Date().toISOString()
             }
-          ]);
+          ], {
+            trackingId: data.data.trackingId,
+            description: descPayload,
+            location: locationPayload,
+            imageReference: uploadRes.url,
+            status: 'Awaiting Clarification',
+            reportedBy: {
+              uid: user?.uid || 'mock-citizen',
+              displayName: user?.displayName || 'Citizen',
+              email: user?.email || ''
+            }
+          });
         } else {
           // Success! Update local results and go to Success step
+          setTrackingId(data.data.trackingId || data.data.aiAnalysis?.trackingId || '');
           setSubmitResult({
-            issueId: dbResult.issueId,
-            trackingId: dbResult.trackingId,
+            issueId: data.data.issueId,
+            trackingId: data.data.trackingId,
             aiAnalysis: data.data.aiAnalysis
           });
-          updateLocalIssue(dbResult.issueId, data.data.aiAnalysis, data.data.timeline);
+          updateLocalIssue(data.data.issueId, data.data.aiAnalysis, data.data.timeline, {
+            trackingId: data.data.trackingId || trackingId,
+            description: descPayload,
+            location: locationPayload,
+            imageReference: uploadRes.url,
+            status: 'AI Verified',
+            reportedBy: {
+              uid: user?.uid || 'mock-citizen',
+              displayName: user?.displayName || 'Citizen',
+              email: user?.email || ''
+            }
+          });
+          updateUserPoints(15);
           setStep(3);
         }
       } else {
@@ -216,9 +314,24 @@ export default function ReportIssue() {
       } : null;
       const descPayload = typeManually ? manualText : (speechHook.transcript || '');
 
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      // Retrieve auth headers with ID token
+      const headers = { 'Content-Type': 'application/json' };
+      if (auth?.currentUser) {
+        try {
+          const token = await auth.currentUser.getIdToken();
+          headers['Authorization'] = `Bearer ${token}`;
+        } catch (e) {
+          console.warn('Failed to retrieve Firebase ID token, using fallback:', e);
+          headers['Authorization'] = `Bearer ${user?.uid || ''}`;
+        }
+      } else if (user?.uid) {
+        headers['Authorization'] = `Bearer ${user.uid}`;
+      }
+
+      // POST to /api/issues on backend with clarification details
+      const response = await fetch('http://localhost:5000/api/issues', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ 
           issueId: lowConfidenceData.issueId,
           clarificationCategory: categoryName,
@@ -232,10 +345,13 @@ export default function ReportIssue() {
       if (data.success) {
         setSubmitResult({
           issueId: lowConfidenceData.issueId,
-          trackingId: trackingId,
+          trackingId: trackingId || data.data.trackingId,
           aiAnalysis: data.data.aiAnalysis
         });
-        updateLocalIssue(lowConfidenceData.issueId, data.data.aiAnalysis, data.data.timeline);
+        updateLocalIssue(lowConfidenceData.issueId, data.data.aiAnalysis, data.data.timeline, {
+          status: 'AI Verified'
+        });
+        updateUserPoints(15);
         setStep(3);
       } else {
         throw new Error(data.message || 'AI pipeline failed.');
@@ -273,6 +389,56 @@ export default function ReportIssue() {
         className="hidden" 
       />
 
+      {showCameraView && (
+        <div className="fixed inset-0 bg-slate-950/90 z-50 flex flex-col items-center justify-center p-4 sm:p-6 animate-fadeIn select-none">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 max-w-md w-full flex flex-col gap-4 text-center">
+            <h3 className="text-white font-bold font-title text-base sm:text-lg flex items-center justify-center gap-2">
+              <Camera className="w-5 h-5 text-primary-blue animate-pulse" />
+              Capture Incident Photo
+            </h3>
+            
+            {/* Video Viewport */}
+            <div className="aspect-[4/3] bg-black rounded-2xl overflow-hidden border border-slate-800 relative">
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className="w-full h-full object-cover" 
+              />
+              {!cameraStream && (
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400 font-semibold animate-pulse">
+                  Requesting camera stream...
+                </div>
+              )}
+            </div>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={handleCameraStop}
+                className="w-full justify-center"
+              >
+                Cancel
+              </Button>
+              
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                onClick={handleCameraCapture}
+                disabled={!cameraStream}
+                className="w-full justify-center"
+              >
+                📸 Capture Photo
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Step 1: Media capture selection */}
       {step === 1 && (
         <div className="space-y-8 animate-fadeIn">
@@ -283,7 +449,7 @@ export default function ReportIssue() {
 
           <div className="flex flex-col gap-5 pt-4">
             <button
-              onClick={() => triggerFileSelect(true)}
+              onClick={handleCameraStart}
               className="flex items-center gap-4 bg-primary-blue hover:bg-primary-dark text-white p-6 rounded-2xl shadow-premium hover:shadow-lg transition-all text-left min-h-[80px] w-full select-none cursor-pointer border-0"
             >
               <div className="p-3 bg-white/10 rounded-xl">
@@ -485,7 +651,7 @@ export default function ReportIssue() {
       )}
 
       {/* Step 2.5: AI Sequential Pipeline Loader */}
-      {step === 2.5 && (
+      {step === 2.5 && !lowConfidenceData && (
         <div className="space-y-8 animate-fadeIn py-6 text-center max-w-md mx-auto">
           <div className="w-16 h-16 rounded-full bg-primary-light flex items-center justify-center text-primary-blue mx-auto shadow-md animate-pulse">
             <Brain className="w-8 h-8 animate-bounce" />

@@ -7,7 +7,7 @@ const apiKey = process.env.GEMINI_API_KEY;
  * @returns {boolean}
  */
 export const isGeminiEnabled = () => {
-  return typeof apiKey === 'string' && apiKey.trim().length > 0;
+  return typeof apiKey === 'string' && apiKey.trim().startsWith('AIzaSy');
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,10 +20,10 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  * @param {string} systemInstruction Optional system directives
  * @param {Buffer} imageBuffer Optional binary image buffer
  * @param {string} mimeType Optional mime type for image
- * @param {number} maxRetries Maximum number of retries before throwing
+ * @param {number} maxRetries Maximum number of retries before throwing (default 1 to fail-fast)
  * @returns {Promise<any>} Parsed JSON response
  */
-export const callGemini = async (prompt, systemInstruction = '', imageBuffer = null, mimeType = 'image/jpeg', maxRetries = 3) => {
+export const callGemini = async (prompt, systemInstruction = '', imageBuffer = null, mimeType = 'image/jpeg', maxRetries = 1) => {
   if (!isGeminiEnabled()) {
     throw new Error('Gemini API key is not configured.');
   }
@@ -65,9 +65,9 @@ export const callGemini = async (prompt, systemInstruction = '', imageBuffer = n
         generationConfig
       });
 
-      // 15 second timeout for responsiveness
+      // 4 second timeout for responsiveness (Gemini 1.5 Flash typically resolves in < 2.5s)
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Gemini API request timed out')), 15000)
+        setTimeout(() => reject(new Error('Gemini API request timed out')), 4000)
       );
 
       const response = await Promise.race([apiCall, timeoutPromise]);
@@ -81,6 +81,13 @@ export const callGemini = async (prompt, systemInstruction = '', imageBuffer = n
     } catch (error) {
       console.warn(`[Gemini Client] Attempt ${attempt} failed: ${error.message}`);
       lastError = error;
+
+      // Abort retries immediately if the API key is explicitly invalid
+      const errText = error.message || '';
+      if (errText.includes('API key not valid') || errText.includes('API_KEY_INVALID') || errText.includes('key is invalid') || errText.includes('400')) {
+        throw error;
+      }
+
       if (attempt < maxRetries) {
         // Exponential backoff: 2s, 4s, 8s...
         await sleep(Math.pow(2, attempt) * 1000);

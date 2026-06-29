@@ -3,7 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useFirestoreListener } from '../hooks/useFirestoreListener';
 import { updateLocalIssue } from '../services/firestoreService';
-import { MapPin, CheckCircle2, Clock, Sparkles, FileText, Info, ShieldCheck, ShieldAlert, ThumbsUp, AlertTriangle, Wrench } from 'lucide-react';
+import { MapPin, CheckCircle2, Clock, Sparkles, FileText, Info, ShieldCheck, ShieldAlert, AlertTriangle, Wrench, Camera } from 'lucide-react';
+import { storageService } from '../services/storageService';
+import { auth } from '../services/firebaseConfig';
+import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
@@ -12,7 +15,7 @@ import LoadingState from '../components/LoadingState';
 
 export default function Timeline() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, updateUserPoints } = useAuth();
 
   // Listen to all issues in real-time
   const allReports = useFirestoreListener();
@@ -48,6 +51,19 @@ export default function Timeline() {
   }, [allReports, activeReportId, userReports]);
 
   const activeReport = allReports.find(r => r.issueId === activeReportId);
+
+  const getImageUrl = (imageRef, category = 'Other') => {
+    if (!imageRef || imageRef.startsWith('blob:')) {
+      const map = {
+        'Road Damage': 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?w=500&q=80',
+        'Water Leakage': 'https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?w=500&q=80',
+        'Garbage': 'https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?w=500&q=80',
+        'Streetlight': 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&q=80'
+      };
+      return map[category] || 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=500&q=80';
+    }
+    return imageRef;
+  };
 
   const getIssueTitle = (report) => {
     if (!report.description) return 'Unnamed Quick Report';
@@ -87,84 +103,163 @@ export default function Timeline() {
     return [];
   };
 
-  // Verification & Upvoting state computations
+  const [toast, setToast] = useState(null);
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  // Close toast automatically after 4 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  // Verification state computations (Module 5)
   const isOwnReport = activeReport?.reportedBy?.uid === user?.uid;
   const hasVerified = activeReport?.verifiedUsers?.includes(user?.uid) || false;
-  const hasSupported = activeReport?.supportedUsers?.includes(user?.uid) || false;
+  const hasExperienced = activeReport?.experiencedUsers?.includes(user?.uid) || false;
+  const hasNoLongerExists = activeReport?.noLongerExistsUsers?.includes(user?.uid) || false;
 
-  const handleVerifyIssue = async () => {
+  const handleVerifyVote = async (voteType) => {
     if (!activeReport || !user) return;
+    
+    // 1. Check if user already voted (client-side safety check)
+    const verification = activeReport.verification || { upvotes: 0, downvotes: 0, confidence: 0, voters: {} };
+    if (verification.voters && verification.voters[user.uid]) {
+      showToast('You have already voted on this issue.', 'error');
+      return;
+    }
+
     setIsActionLoading(true);
+
+    // Optimistic UI updates
+    const prevVerification = { ...verification };
+    const updatedVoters = { ...(verification.voters || {}), [user.uid]: voteType };
+    const updatedUpvotes = (verification.upvotes || 0) + (voteType === 'up' ? 1 : 0);
+    const updatedDownvotes = (verification.downvotes || 0) + (voteType === 'down' ? 1 : 0);
+    const updatedTotal = updatedUpvotes + updatedDownvotes;
+    const updatedConfidence = updatedTotal === 0 ? 0 : Math.round((updatedUpvotes / updatedTotal) * 100);
+
+    const optimisticVerification = {
+      upvotes: updatedUpvotes,
+      downvotes: updatedDownvotes,
+      confidence: updatedConfidence,
+      voters: updatedVoters
+    };
+
+    // Optimistically update the local copy of the issue so the UI updates immediately!
+    updateLocalIssue(activeReport.issueId, null, null, { verification: optimisticVerification });
+
     try {
-      const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          userId: user.uid,
-          // Backup parameters for credentials-free fallback mode
-          reportedBy: activeReport.reportedBy,
-          verificationCount: activeReport.verificationCount || 0,
-          verifiedUsers: activeReport.verifiedUsers || [],
-          supportCount: activeReport.supportCount || 0,
-          supportedUsers: activeReport.supportedUsers || [],
-          aiAnalysis: activeReport.aiAnalysis,
-          timeline: activeReport.timeline,
-          createdAt: activeReport.createdAt
-        })
-      });
-      const data = await response.json();
-      if (data.success) {
-        // Sync results to localStorage for real-time reactivity in the listener hook
-        updateLocalIssue(activeReport.issueId, activeReport.aiAnalysis, data.data.timeline, {
-          verificationCount: data.data.verificationCount,
-          verifiedUsers: data.data.verifiedUsers,
-          communityVerified: data.data.communityVerified,
-          priorityScore: data.data.priorityScore,
-          lastUpdated: data.data.lastUpdated
-        });
+      const token = await auth.currentUser?.getIdToken();
+      const isMockMode = !auth.currentUser || (user?.uid && user.uid.startsWith('mock-'));
+      
+      let data;
+      if (isMockMode) {
+        // Simulate network delay
+        await new Promise(resolve => setTimeout(resolve, 800));
+        data = {
+          success: true,
+          data: optimisticVerification
+        };
       } else {
-        alert(data.message || 'Failed to verify issue.');
+        const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/verify`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token || ''}`
+          },
+          body: JSON.stringify({ vote: voteType })
+        });
+        
+        if (response.status === 404) {
+          throw new Error('Issue not found. It may have been deleted.');
+        }
+        
+        data = await response.json();
+      }
+
+      if (data.success) {
+        updateLocalIssue(activeReport.issueId, null, null, { verification: data.data });
+        updateUserPoints(5);
+        showToast('Your verification vote has been registered!', 'success');
+      } else {
+        // Rollback optimistic update
+        updateLocalIssue(activeReport.issueId, null, null, { verification: prevVerification });
+        showToast(data.message || 'Failed to record vote.', 'error');
       }
     } catch (err) {
-      console.error(err);
-      alert('Network error verifying issue.');
+      console.error('[Verify Vote Error]:', err);
+      // Rollback optimistic update
+      updateLocalIssue(activeReport.issueId, null, null, { verification: prevVerification });
+      showToast(err.message || 'Network error recording vote. Please try again.', 'error');
     } finally {
       setIsActionLoading(false);
     }
   };
 
-  const handleSupportIssue = async () => {
+  const handleCivicAction = async (action, evidenceUrl = null) => {
     if (!activeReport || !user) return;
     setIsActionLoading(true);
     try {
-      const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/support`, {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/action`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || 'mock-citizen'}`
+        },
         body: JSON.stringify({ 
+          action,
           userId: user.uid,
-          // Backup parameters for credentials-free fallback mode
-          verificationCount: activeReport.verificationCount || 0,
-          supportCount: activeReport.supportCount || 0,
-          supportedUsers: activeReport.supportedUsers || [],
-          aiAnalysis: activeReport.aiAnalysis,
-          createdAt: activeReport.createdAt
+          evidenceUrl
         })
       });
       const data = await response.json();
       if (data.success) {
-        // Sync results to localStorage for real-time reactivity in the listener hook
-        updateLocalIssue(activeReport.issueId, activeReport.aiAnalysis, activeReport.timeline, {
-          supportCount: data.data.supportCount,
-          supportedUsers: data.data.supportedUsers,
+        updateLocalIssue(activeReport.issueId, data.data.aiAnalysis, data.data.timeline, {
+          verifiedUsers: data.data.verifiedUsers,
+          verificationCount: data.data.verificationCount,
+          experiencedUsers: data.data.experiencedUsers,
+          experiencedCount: data.data.experiencedCount,
+          evidenceImages: data.data.evidenceImages,
+          noLongerExistsUsers: data.data.noLongerExistsUsers,
+          noLongerExistsCount: data.data.noLongerExistsCount,
+          impactScore: data.data.impactScore,
           priorityScore: data.data.priorityScore,
+          status: data.data.status,
           lastUpdated: data.data.lastUpdated
         });
       } else {
-        alert(data.message || 'Failed to support issue.');
+        showToast(data.message || `Failed to record action: ${action}`, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert('Network error supporting issue.');
+      showToast(`Network error recording action: ${action}`, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleEvidenceUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeReport || !user) return;
+    setIsActionLoading(true);
+    try {
+      const uploadPath = `evidence/${activeReport.issueId}/${Date.now()}_${file.name}`;
+      const uploadRes = await storageService.uploadFile(uploadPath, file);
+      if (uploadRes && uploadRes.url) {
+        await handleCivicAction('evidence', uploadRes.url);
+        showToast('Supporting evidence photo uploaded successfully!', 'success');
+      } else {
+        throw new Error('Upload failed.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error uploading evidence photo: ' + err.message, 'error');
     } finally {
       setIsActionLoading(false);
     }
@@ -196,37 +291,52 @@ export default function Timeline() {
                   key={report.issueId}
                   onClick={() => setActiveReportId(report.issueId)}
                   hoverEffect={activeReportId !== report.issueId}
-                  className={`border-l-4 transition-all w-full select-none cursor-pointer ${
+                  className={`border-l-4 transition-all w-full select-none cursor-pointer flex gap-4 p-4 ${
                     activeReportId === report.issueId
                       ? 'border-l-primary-blue bg-blue-50/10 shadow-md ring-1 ring-primary-blue/5'
                       : 'border-l-slate-200 hover:border-l-primary-blue/40'
                   }`}
                 >
-                  <div className="space-y-2">
+                  {/* Left Side: Thumbnail Attachment */}
+                  <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-50 border border-slate-100 shrink-0 relative shadow-sm">
+                    <img 
+                      src={getImageUrl(report.imageReference, report.aiAnalysis?.category || report.category)} 
+                      alt="Attachment Preview" 
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.src = 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80';
+                      }}
+                    />
+                  </div>
+
+                  {/* Right Side: Details */}
+                  <div className="flex-1 min-w-0 space-y-1.5 text-left">
                     <div className="flex justify-between items-start gap-2">
                       <span className="text-[10px] font-bold text-slate-400 font-mono">{report.trackingId}</span>
-                      <div className="flex items-center gap-1.5">
-                        {report.communityVerified && (
-                          <Badge status="Community Verified" className="scale-90" />
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {((report.verification?.confidence || 0) >= 50 || report.communityVerified) && (
+                          <span className="text-[8px] font-black px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-100/50 flex items-center gap-0.5 uppercase tracking-wider select-none shrink-0 font-sans">
+                            🤝 Verified
+                          </span>
                         )}
                         <Badge status={report.status} />
                       </div>
                     </div>
-                    <h4 className="font-bold text-slate-800 text-sm line-clamp-1">{getIssueTitle(report)}</h4>
-                    <p className="text-xs text-slate-500 line-clamp-1 flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <h4 className="font-extrabold text-slate-800 text-xs sm:text-sm line-clamp-1">{getIssueTitle(report)}</h4>
+                    <p className="text-[10px] text-slate-500 line-clamp-1 flex items-center gap-0.5 font-medium">
+                      <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
                       {report.location?.address || 'Captured Location'}
                     </p>
-                    <div className="flex items-center justify-between pt-2 text-[10px] text-slate-400 font-semibold border-t border-slate-50">
+                    <div className="flex items-center justify-between pt-1.5 text-[9px] text-slate-400 font-bold border-t border-slate-50/50">
                       <span>
                         {report.createdAt ? new Date(report.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
                       </span>
-                      {report.aiAnalysis?.category ? (
-                        <span className="capitalize text-blue-600 bg-blue-50/50 px-2 py-0.5 rounded-full border border-blue-100/30">
-                          {report.aiAnalysis.category}
+                      {report.aiAnalysis?.category || report.category ? (
+                        <span className="capitalize text-indigo-650 bg-indigo-50/50 px-2 py-0.5 rounded border border-indigo-100/30">
+                          {report.aiAnalysis?.category || report.category}
                         </span>
                       ) : (
-                        <span className="capitalize text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Awaiting AI</span>
+                        <span className="capitalize text-slate-500 bg-slate-100 px-2 py-0.5 rounded">Awaiting AI</span>
                       )}
                     </div>
                   </div>
@@ -280,7 +390,14 @@ export default function Timeline() {
                 </div>
                 {activeReport.imageReference && (
                   <div className="w-full max-h-[220px] bg-slate-50 rounded-2xl overflow-hidden border border-slate-100/50 aspect-video relative flex items-center justify-center">
-                    <img src={activeReport.imageReference} alt="Issue Attachment" className="w-full h-full object-cover" />
+                    <img 
+                      src={getImageUrl(activeReport.imageReference, activeReport.aiAnalysis?.category || activeReport.category)} 
+                      alt="Issue Attachment" 
+                      className="w-full h-full object-cover" 
+                      onError={(e) => {
+                        e.target.src = 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=500&q=80';
+                      }}
+                    />
                   </div>
                 )}
                 <div className="space-y-3">
@@ -302,88 +419,150 @@ export default function Timeline() {
                 </div>
               </div>
 
-              {/* Smart Priority Score Panel */}
-              <div className="bg-slate-50/80 border border-slate-200/50 p-4 rounded-2xl space-y-4">
+              {/* Collaborative Validation Panel (Community Verification) */}
+              <div className="bg-gradient-to-br from-indigo-50/60 via-white to-slate-50/50 border-2 border-indigo-200/80 p-4 sm:p-5 rounded-3xl space-y-5 shadow-md relative overflow-hidden ring-4 ring-indigo-50/30">
+                {/* Glowing background accent */}
+                <div className="absolute -right-8 -top-8 w-24 h-24 bg-indigo-200/35 rounded-full blur-xl pointer-events-none" />
+                
                 <div className="flex justify-between items-center relative">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Smart Priority Score</span>
-                  <div className="relative group">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-indigo-750 uppercase tracking-widest bg-indigo-100/60 px-2.5 py-0.5 rounded-md border border-indigo-200/40">
+                      ⚡ Community Verification
+                    </span>
+                  </div>
+                  <div className="relative group shrink-0">
                     <span className="flex items-center gap-1 text-[9px] font-bold text-slate-400 cursor-help bg-white px-2 py-0.5 rounded border border-slate-200 transition-colors hover:bg-slate-50">
                       <Info className="w-3 h-3 text-slate-400" />
-                      How is this calculated?
+                      What is this?
                     </span>
-                    <div className="absolute right-0 bottom-6 hidden group-hover:block bg-slate-900 text-white text-[10px] p-2.5 rounded-xl shadow-lg w-52 z-30 leading-normal border border-slate-800 font-normal">
-                      This score combines AI analysis and community validation to help authorities prioritize issues.
+                    <div className="absolute right-0 bottom-6 hidden group-hover:block bg-slate-900 text-white text-[10px] p-2.5 rounded-xl shadow-lg w-56 z-30 leading-normal border border-slate-800 font-normal text-left">
+                      Community members verify if reported issues are genuine. An issue must be verified by citizens to be validated.
                     </div>
                   </div>
                 </div>
                 
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-3xl font-extrabold text-slate-800 font-title">
-                    {activeReport.priorityScore !== undefined ? activeReport.priorityScore : 25}
-                  </span>
-                  <span className="text-xs font-semibold text-slate-400">/ 100</span>
-                </div>
+                {/* Metrics: upvotes, downvotes, confidence */}
+                {(() => {
+                  const verification = activeReport.verification || { upvotes: 0, downvotes: 0, confidence: 0, voters: {} };
+                  const upvotes = verification.upvotes || 0;
+                  const downvotes = verification.downvotes || 0;
+                  const confidence = verification.confidence || 0;
+                  const hasVoted = verification.voters && verification.voters[user?.uid];
+                  const userVote = hasVoted ? verification.voters[user.uid] : null;
 
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <button
-                    type="button"
-                    disabled={isOwnReport || hasVerified || isActionLoading}
-                    onClick={handleVerifyIssue}
-                    className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold border transition-all select-none min-h-[38px] ${
-                      hasVerified
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 cursor-not-allowed'
-                        : isOwnReport
-                          ? 'bg-slate-50 text-slate-400 border-slate-200/70 cursor-not-allowed opacity-60'
-                          : 'bg-primary-blue hover:bg-primary-dark text-white border-primary-blue cursor-pointer shadow-sm hover:shadow-md'
-                    }`}
-                  >
-                    {hasVerified ? (
-                      <>
-                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                        Verified ({activeReport.verificationCount || 0})
-                      </>
-                    ) : isOwnReport ? (
-                      <>
-                        <ShieldAlert className="w-4 h-4 text-slate-400" />
-                        Self-Reported
-                      </>
-                    ) : (
-                      <>
-                        <ShieldAlert className="w-4 h-4 text-white" />
-                        Verify Issue ({activeReport.verificationCount || 0})
-                      </>
-                    )}
-                  </button>
+                  return (
+                    <>
+                      {/* Telemetry row */}
+                      <div className="grid grid-cols-3 gap-2 text-left bg-white p-3 rounded-xl border border-slate-100 select-none">
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Verified Citizens</span>
+                          <div className="flex items-baseline gap-1 text-emerald-600">
+                            <span className="text-xl font-extrabold font-title">👍 {upvotes}</span>
+                          </div>
+                        </div>
 
-                  <button
-                    type="button"
-                    disabled={hasSupported || isActionLoading}
-                    onClick={handleSupportIssue}
-                    className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold border transition-all select-none min-h-[38px] ${
-                      hasSupported
-                        ? 'bg-blue-50 text-blue-700 border-blue-200 cursor-not-allowed'
-                        : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer shadow-sm hover:shadow-md'
-                    }`}
-                  >
-                    {hasSupported ? (
-                      <>
-                        <ThumbsUp className="w-3.5 h-3.5 text-blue-600 fill-current" />
-                        Supported ({activeReport.supportCount || 0})
-                      </>
-                    ) : (
-                      <>
-                        <ThumbsUp className="w-3.5 h-3.5 text-slate-505" />
-                        Support ({activeReport.supportCount || 0})
-                      </>
-                    )}
-                  </button>
+                        <div className="space-y-1 border-x border-slate-100 px-2 sm:px-3">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Invalid Marks</span>
+                          <div className="flex items-baseline gap-1 text-rose-500">
+                            <span className="text-xl font-extrabold font-title">👎 {downvotes}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1 pl-2 sm:pl-3">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Community Confidence</span>
+                          <div className="flex items-baseline gap-0.5 text-slate-850">
+                            <span className="text-xl font-extrabold font-title">{confidence}%</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Vote Buttons Row */}
+                      <div className="space-y-2.5">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block text-left">Citizen Verification Choice</span>
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* Vote Up: Verify Issue */}
+                          <button
+                            type="button"
+                            disabled={hasVoted || isActionLoading}
+                            onClick={() => handleVerifyVote('up')}
+                            className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl text-xs font-bold border transition-all select-none min-h-[38px] cursor-pointer ${
+                              userVote === 'up'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 cursor-not-allowed shadow-inner'
+                                : hasVoted
+                                  ? 'bg-slate-50 text-slate-400 border-slate-100 cursor-not-allowed opacity-50'
+                                  : 'bg-emerald-600 hover:bg-emerald-750 text-white border-emerald-600 shadow-sm'
+                            }`}
+                          >
+                            <ShieldCheck className="w-4 h-4" />
+                            {userVote === 'up' ? 'Verified by You' : 'Verify Issue'}
+                          </button>
+
+                          {/* Vote Down: Mark as Invalid */}
+                          <button
+                            type="button"
+                            disabled={hasVoted || isActionLoading}
+                            onClick={() => handleVerifyVote('down')}
+                            className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl text-xs font-bold border transition-all select-none min-h-[38px] cursor-pointer ${
+                              userVote === 'down'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200 cursor-not-allowed shadow-inner'
+                                : hasVoted
+                                  ? 'bg-slate-50 text-slate-400 border-slate-100 cursor-not-allowed opacity-50'
+                                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-sm'
+                            }`}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            {userVote === 'down' ? 'Marked Invalid' : 'Mark as Invalid'}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* Additional Evidence Gallery Upload Option */}
+                <div className="border-t border-slate-100 pt-3 text-left space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Add Supporting Photos</span>
+                    <label
+                      className={`flex items-center justify-center gap-1.5 py-1 px-2.5 rounded-lg text-[10px] font-bold border transition-all select-none cursor-pointer bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-sm ${
+                        isActionLoading ? 'opacity-50 pointer-events-none' : ''
+                      }`}
+                    >
+                      <Camera className="w-3 h-3" />
+                      Upload Evidence
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={handleEvidenceUpload} 
+                        className="hidden" 
+                        disabled={isActionLoading}
+                      />
+                    </label>
+                  </div>
+                  
+                  {activeReport.evidenceImages && activeReport.evidenceImages.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto pb-1 max-h-[80px] scrollbar-thin">
+                      {activeReport.evidenceImages.map((img, idx) => (
+                        <a 
+                          key={idx} 
+                          href={img.url} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="w-14 h-14 rounded-lg overflow-hidden border border-slate-200 flex-shrink-0 hover:border-primary-blue transition-all"
+                        >
+                          <img 
+                            src={img.url} 
+                            alt={`Evidence ${idx + 1}`} 
+                            className="w-full h-full object-cover" 
+                            onError={(e) => {
+                              e.target.src = 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80';
+                            }}
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                
-                {isOwnReport && (
-                  <p className="text-[9px] text-slate-400 font-semibold italic text-center leading-none">
-                    * You cannot verify your own reports to ensure validation integrity.
-                  </p>
-                )}
               </div>
 
               {/* Vertical Steps */}
@@ -438,6 +617,22 @@ export default function Timeline() {
           )}
         </div>
       </div>
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2.5 px-4.5 py-3 rounded-2xl shadow-xl border text-xs font-bold leading-normal select-none ${
+              toast.type === 'error'
+                ? 'bg-rose-50 border-rose-100 text-rose-700'
+                : 'bg-emerald-50 border-emerald-100 text-emerald-700'
+            }`}
+          >
+            {toast.type === 'error' ? '❌' : '✅'} {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, isInitialized, initError } from '../services/firebaseConfig';
+import { db, auth, isInitialized, initError } from '../services/firebaseConfig';
 import { loginWithGoogle as loginWithGoogleService, logoutUser, onAuthStateChangedListener } from '../services/authService';
 import { getOrCreateUserDoc } from '../services/firestoreService';
 
@@ -135,6 +135,13 @@ export function AuthProvider({ children }) {
     setError(null);
     setLoading(true);
     try {
+      if (isInitialized && auth.currentUser) {
+        try {
+          await auth.signOut();
+        } catch (signOutErr) {
+          console.warn('Firebase signout during mock login failed:', signOutErr.message);
+        }
+      }
       let mockUid = role === 'admin' ? 'mock-admin-uid-123' : 'mock-citizen-uid-456';
       let mockDisplayName = role === 'admin' ? 'Admin Officer' : 'Lakshmi Prasad';
       let mockEmail = role === 'admin' ? 'admin@civicmind.gov' : 'citizen@civicmind.org';
@@ -228,8 +235,25 @@ export function AuthProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
+  const updateUserPoints = async (amount) => {
+    if (!user) return;
+    const newPoints = (user.points || 0) + amount;
+    setUser(prev => prev ? { ...prev, points: newPoints } : null);
+
+    // If online, also update user's points doc in Firestore
+    if (isInitialized && auth.currentUser) {
+      try {
+        const { doc, setDoc } = await import('firebase/firestore');
+        const userRef = doc(db, 'users', user.uid);
+        await setDoc(userRef, { points: newPoints }, { merge: true });
+      } catch (err) {
+        console.warn('Error updating points in Firestore:', err.message);
+      }
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, error, isOffline, loginWithGoogle, loginDeveloperMock, logout, toggleUserRole, clearError }}>
+    <AuthContext.Provider value={{ user, loading, error, isOffline, loginWithGoogle, loginDeveloperMock, logout, toggleUserRole, clearError, updateUserPoints }}>
       {children}
     </AuthContext.Provider>
   );

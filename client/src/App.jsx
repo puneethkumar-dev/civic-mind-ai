@@ -11,19 +11,20 @@ import Profile from './pages/Profile';
 import AdminDashboard from './pages/AdminDashboard';
 import NotFound from './pages/NotFound';
 
+// Route guard helper
+const ProtectedRoute = ({ children, requireAdmin = false }) => {
+  const { user } = useAuth();
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  if (requireAdmin && user.role !== 'admin') {
+    return <Navigate to="/home" replace />;
+  }
+  return children;
+};
+
 function AppContent() {
   const { user } = useAuth();
-
-  // Route guard helper
-  const ProtectedRoute = ({ children, requireAdmin = false }) => {
-    if (!user) {
-      return <Navigate to="/login" replace />;
-    }
-    if (requireAdmin && user.role !== 'admin') {
-      return <Navigate to="/home" replace />;
-    }
-    return children;
-  };
 
   return (
     <BrowserRouter>

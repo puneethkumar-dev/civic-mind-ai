@@ -10,10 +10,24 @@ class FirebaseStorageDriver {
       throw new Error('Firebase client not initialized. Cannot perform Firebase Storage operations.');
     }
 
-    const storageRef = ref(storage, path);
-    const snapshot = await uploadBytes(storageRef, file, { customMetadata: metadata });
-    const url = await getDownloadURL(snapshot.ref);
-    return { url, path };
+    try {
+      const storageRef = ref(storage, path);
+      
+      // Wrap the storage upload in a 3-second timeout to prevent infinite hangs on slow/blocked connections
+      const uploadPromise = uploadBytes(storageRef, file, { customMetadata: metadata });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Firebase Storage upload timed out')), 3000)
+      );
+
+      const snapshot = await Promise.race([uploadPromise, timeoutPromise]);
+      const url = await getDownloadURL(snapshot.ref);
+      return { url, path };
+    } catch (err) {
+      console.warn('[Storage Service] Firebase Storage upload failed, falling back to local object URL:', err.message);
+      // Return a local Object URL (mock behavior) as a fallback so the app continues working locally
+      const url = URL.createObjectURL(file);
+      return { url, path };
+    }
   }
 
   async deleteFile(path) {
@@ -71,9 +85,9 @@ class MockStorageDriver {
   }
 }
 
-// Spark plan constraints require mock storage for local development.
-// Swap to FirebaseStorageDriver when moving to production/blaze plan.
-const activeDriver = new MockStorageDriver();
+import { isInitialized } from './firebaseConfig';
+
+const activeDriver = isInitialized ? new FirebaseStorageDriver() : new MockStorageDriver();
 
 export const storageService = {
   uploadFile: (path, file, metadata) => activeDriver.uploadFile(path, file, metadata),

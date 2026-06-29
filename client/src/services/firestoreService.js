@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
-import { db, isInitialized } from './firebaseConfig';
+import { db, auth, isInitialized } from './firebaseConfig';
 
 // LocalStorage issues fallback store helpers
 const getLocalIssues = () => {
@@ -199,18 +199,38 @@ export const getUserIssues = async (uid) => {
  * @param {object} aiAnalysis 
  * @param {Array} timeline 
  */
-export const updateLocalIssue = (issueId, aiAnalysis, timeline) => {
+export const updateLocalIssue = (issueId, aiAnalysis, timeline, additionalFields = {}) => {
   const list = getLocalIssues();
   const index = list.findIndex(item => item.issueId === issueId);
   if (index !== -1) {
     list[index] = {
       ...list[index],
-      aiAnalysis,
-      timeline,
-      status: 'AI Verified',
+      aiAnalysis: aiAnalysis || list[index].aiAnalysis,
+      timeline: timeline || list[index].timeline,
+      ...additionalFields,
       updatedAt: new Date().toISOString()
     };
     saveLocalIssues(list);
-    console.log(`[LocalStorage] Updated issue "${issueId}" with AI decision pipeline results.`);
+    
+    // Dispatch a custom event to notify listeners in other parts of the application instantly
+    window.dispatchEvent(new Event('civicmind_local_issues_updated'));
+    console.log(`[LocalStorage] Updated issue "${issueId}" successfully.`);
+  } else {
+    // If not found in localStorage (new issue created remotely), insert a new record
+    const newLocal = {
+      issueId,
+      aiAnalysis,
+      timeline,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      reportedBy: {
+        uid: auth?.currentUser?.uid || 'mock-citizen',
+        displayName: 'Citizen'
+      },
+      ...additionalFields
+    };
+    list.push(newLocal);
+    saveLocalIssues(list);
+    console.log(`[LocalStorage] Inserted new issue "${issueId}" successfully.`);
   }
 };

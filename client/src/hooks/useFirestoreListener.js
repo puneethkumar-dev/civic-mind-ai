@@ -29,15 +29,16 @@ export const useFirestoreListener = (uid = null) => {
 
   useEffect(() => {
     let unsubscribe = null;
+    let fallbackCleanup = null;
     let useLocal = !isInitialized || (uid && uid.startsWith('mock-'));
-
+ 
     if (!useLocal) {
       try {
         const issuesRef = collection(db, 'issues');
         const q = uid 
           ? query(issuesRef, where('reportedBy.uid', '==', uid))
           : query(issuesRef);
-
+ 
         unsubscribe = onSnapshot(q, (snapshot) => {
           const dbIssues = [];
           snapshot.forEach((docSnap) => {
@@ -48,7 +49,7 @@ export const useFirestoreListener = (uid = null) => {
               updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : data.updatedAt,
             });
           });
-
+ 
           // Merge local issues to maintain consistent offline testing data if any exists
           const localList = getLocalIssues();
           const merged = [...dbIssues];
@@ -57,52 +58,71 @@ export const useFirestoreListener = (uid = null) => {
               merged.push(local);
             }
           }
-
+ 
           // Sort descending by creation date
           merged.sort((a, b) => {
             const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
             const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
             return dateB - dateA;
           });
-
+ 
           setIssues(merged);
         }, (error) => {
           console.warn('[Firestore Listener] Snapshot listener failed or permission denied. Falling back to local storage:', error.message);
           setIssues(getLocalIssues());
+
+          if (!fallbackCleanup) {
+            const handleStorageChange = (e) => {
+              if (e.key === 'civicmind_local_issues') {
+                setIssues(getLocalIssues());
+              }
+            };
+            const handleCustomChange = () => {
+              setIssues(getLocalIssues());
+            };
+            window.addEventListener('storage', handleStorageChange);
+            window.addEventListener('civicmind_local_issues_updated', handleCustomChange);
+
+            fallbackCleanup = () => {
+              window.removeEventListener('storage', handleStorageChange);
+              window.removeEventListener('civicmind_local_issues_updated', handleCustomChange);
+            };
+          }
         });
       } catch (err) {
         console.warn('[Firestore Listener] Setup failed. Falling back to local storage:', err.message);
         useLocal = true;
       }
     }
-
+ 
     if (useLocal || !unsubscribe) {
       // Load initial offline data
       setIssues(getLocalIssues());
-
+ 
       // React to changes in other tabs
       const handleStorageChange = (e) => {
         if (e.key === 'civicmind_local_issues') {
           setIssues(getLocalIssues());
         }
       };
-
+ 
       // React to local updates in the same tab instantly
       const handleCustomChange = () => {
         setIssues(getLocalIssues());
       };
-
+ 
       window.addEventListener('storage', handleStorageChange);
       window.addEventListener('civicmind_local_issues_updated', handleCustomChange);
-
+ 
       return () => {
         window.removeEventListener('storage', handleStorageChange);
         window.removeEventListener('civicmind_local_issues_updated', handleCustomChange);
       };
     }
-
+ 
     return () => {
       if (unsubscribe) unsubscribe();
+      if (fallbackCleanup) fallbackCleanup();
     };
   }, [uid]);
 
