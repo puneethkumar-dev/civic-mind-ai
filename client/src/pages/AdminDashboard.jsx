@@ -38,6 +38,7 @@ import Card from '../components/Card';
 import Badge from '../components/Badge';
 import bgImage from '../assets/hero_skyline_background.png';
 import LoadingState from '../components/LoadingState';
+import { API_URL } from '../config/api';
 
 export default function AdminDashboard() {
   const { logout } = useAuth();
@@ -60,7 +61,7 @@ export default function AdminDashboard() {
       try {
         setLoadingInsights(true);
         const token = await auth.currentUser?.getIdToken();
-        const response = await fetch('http://localhost:5000/api/admin/insights', {
+        const response = await fetch(`${API_URL}/api/admin/insights`, {
           headers: {
             'Authorization': `Bearer ${token || 'mock-admin'}`
           }

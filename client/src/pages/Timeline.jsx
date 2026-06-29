@@ -12,6 +12,7 @@ import Card from '../components/Card';
 import Badge from '../components/Badge';
 import EmptyState from '../components/EmptyState';
 import LoadingState from '../components/LoadingState';
+import { API_URL } from '../config/api';
 
 export default function Timeline() {
   const navigate = useNavigate();
@@ -166,7 +167,7 @@ export default function Timeline() {
           data: optimisticVerification
         };
       } else {
-        const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/verify`, {
+        const response = await fetch(`${API_URL}/api/issues/${activeReport.issueId}/verify`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -206,7 +207,7 @@ export default function Timeline() {
     setIsActionLoading(true);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const response = await fetch(`http://localhost:5000/api/issues/${activeReport.issueId}/action`, {
+      const response = await fetch(`${API_URL}/api/issues/${activeReport.issueId}/action`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

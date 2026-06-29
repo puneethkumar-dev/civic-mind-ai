@@ -11,6 +11,7 @@ import Button from '../components/Button';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import PageHeader from '../components/PageHeader';
+import { API_URL } from '../config/api';
 
 export default function ReportIssue() {
   const navigate = useNavigate();
@@ -198,7 +199,7 @@ export default function ReportIssue() {
       }
 
       // 5. POST to /api/issues directly on backend
-      const response = await fetch('http://localhost:5000/api/issues', {
+      const response = await fetch(`${API_URL}/api/issues`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ 
@@ -329,7 +330,7 @@ export default function ReportIssue() {
       }
 
       // POST to /api/issues on backend with clarification details
-      const response = await fetch('http://localhost:5000/api/issues', {
+      const response = await fetch(`${API_URL}/api/issues`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ 
