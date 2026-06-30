@@ -7,7 +7,10 @@ import { getOrCreateUserDoc } from '../services/firestoreService';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    const savedMock = localStorage.getItem('civicmind_mock_user');
+    return savedMock ? JSON.parse(savedMock) : null;
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -77,6 +80,7 @@ export function AuthProvider({ children }) {
         points: userDoc.points !== undefined ? userDoc.points : 0,
         badges: userDoc.badges || [],
       });
+      localStorage.removeItem('civicmind_mock_user');
     } catch (err) {
       console.error('Login process error:', err);
       setError(getFriendlyErrorMessage(err));
@@ -87,6 +91,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     if (!isInitialized) {
+      localStorage.removeItem('civicmind_mock_user');
       setUser(null);
       setLoading(false);
       return;
@@ -95,6 +100,7 @@ export function AuthProvider({ children }) {
     setError(null);
     setLoading(true);
     try {
+      localStorage.removeItem('civicmind_mock_user');
       await logoutUser();
       setUser(null);
     } catch (err) {
@@ -117,10 +123,14 @@ export function AuthProvider({ children }) {
     setError(null);
     try {
       await updateDoc(userDocRef, { role: newRole });
-      setUser((prev) => ({
-        ...prev,
+      const updatedUser = {
+        ...user,
         role: newRole,
-      }));
+      };
+      setUser(updatedUser);
+      if (localStorage.getItem('civicmind_mock_user')) {
+        localStorage.setItem('civicmind_mock_user', JSON.stringify(updatedUser));
+      }
     } catch (err) {
       console.error('Error updating user role in Firestore:', err);
       setError(getFriendlyErrorMessage(err));
@@ -185,6 +195,7 @@ export function AuthProvider({ children }) {
       }
 
       setUser(mockUser);
+      localStorage.setItem('civicmind_mock_user', JSON.stringify(mockUser));
     } catch (err) {
       console.error('Mock login error:', err);
       setError(err.message);
@@ -202,6 +213,7 @@ export function AuthProvider({ children }) {
 
     const unsubscribe = onAuthStateChangedListener(async (fbUser) => {
       if (fbUser) {
+        localStorage.removeItem('civicmind_mock_user');
         try {
           const userDoc = await getOrCreateUserDoc(fbUser);
           setUser({
@@ -227,7 +239,12 @@ export function AuthProvider({ children }) {
           });
         }
       } else {
-        setUser(null);
+        const savedMock = localStorage.getItem('civicmind_mock_user');
+        if (savedMock) {
+          setUser(JSON.parse(savedMock));
+        } else {
+          setUser(null);
+        }
       }
       setLoading(false);
     });

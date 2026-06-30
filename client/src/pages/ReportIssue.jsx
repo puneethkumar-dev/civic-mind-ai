@@ -6,12 +6,27 @@ import { useSpeechToText } from '../hooks/useSpeechToText';
 import { storageService } from '../services/storageService';
 import { createIssueDoc, updateLocalIssue } from '../services/firestoreService';
 import { auth } from '../services/firebaseConfig';
-import { Camera, Image as ImageIcon, Mic, MicOff, CheckCircle2, Loader2, FileText, Home, Plus, RefreshCw, Sparkles, Brain, AlertTriangle } from 'lucide-react';
+import { Camera, Image as ImageIcon, Mic, MicOff, CheckCircle2, Loader2, FileText, Home, Plus, RefreshCw, Sparkles, Brain, AlertTriangle, Eye, Tags, Send, Layers } from 'lucide-react';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import PageHeader from '../components/PageHeader';
 import { API_URL } from '../config/api';
+
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+const getStageIcon = (iconName, colorClass) => {
+  switch (iconName) {
+    case 'Eye': return <Eye className={`w-4.5 h-4.5 ${colorClass}`} />;
+    case 'Tags': return <Tags className={`w-4.5 h-4.5 ${colorClass}`} />;
+    case 'AlertTriangle': return <AlertTriangle className={`w-4.5 h-4.5 ${colorClass}`} />;
+    case 'Send': return <Send className={`w-4.5 h-4.5 ${colorClass}`} />;
+    case 'Layers': return <Layers className={`w-4.5 h-4.5 ${colorClass}`} />;
+    case 'FileText': return <FileText className={`w-4.5 h-4.5 ${colorClass}`} />;
+    default: return <Sparkles className={`w-4.5 h-4.5 ${colorClass}`} />;
+  }
+};
 
 export default function ReportIssue() {
   const navigate = useNavigate();
@@ -40,6 +55,11 @@ export default function ReportIssue() {
   const [cameraStream, setCameraStream] = useState(null);
   const videoRef = useRef(null);
 
+  // Map picker integration refs
+  const reportMapContainerRef = useRef(null);
+  const reportMapInstanceRef = useRef(null);
+  const reportMarkerRef = useRef(null);
+
   useEffect(() => {
     return () => {
       if (cameraStream) {
@@ -47,6 +67,91 @@ export default function ReportIssue() {
       }
     };
   }, [cameraStream]);
+
+  // Leaflet map picker synchronization
+  useEffect(() => {
+    if (step !== 2 || !locationHook.coords || !reportMapContainerRef.current) {
+      if (reportMapInstanceRef.current) {
+        reportMapInstanceRef.current.remove();
+        reportMapInstanceRef.current = null;
+        reportMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const { latitude, longitude } = locationHook.coords;
+
+    if (!reportMapInstanceRef.current) {
+      const map = L.map(reportMapContainerRef.current, {
+        zoomControl: false,
+        attributionControl: true
+      });
+
+      L.control.zoom({ position: 'topright' }).addTo(map);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      map.setView([latitude, longitude], 16);
+      reportMapInstanceRef.current = map;
+
+      const draggableIcon = L.divIcon({
+        className: 'custom-report-icon',
+        html: `
+          <div class="relative flex items-center justify-center w-9 h-9 rounded-full bg-primary-blue text-white shadow-xl border-2 border-white transition-all transform hover:scale-110 active:scale-95 duration-200 cursor-pointer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+          </div>
+        `,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
+      });
+
+      const marker = L.marker([latitude, longitude], {
+        icon: draggableIcon,
+        draggable: true
+      }).addTo(map);
+
+      reportMarkerRef.current = marker;
+
+      // Handle marker drag
+      marker.on('dragend', async () => {
+        const newLatLng = marker.getLatLng();
+        await locationHook.updateCoordinates(newLatLng.lat, newLatLng.lng);
+        map.panTo(newLatLng);
+      });
+
+      // Handle map click
+      map.on('click', async (e) => {
+        const { lat, lng } = e.latlng;
+        marker.setLatLng([lat, lng]);
+        await locationHook.updateCoordinates(lat, lng);
+        map.panTo([lat, lng]);
+      });
+    } else {
+      const map = reportMapInstanceRef.current;
+      const marker = reportMarkerRef.current;
+      if (marker) {
+        const currentMarkerLatLng = marker.getLatLng();
+        if (Math.abs(currentMarkerLatLng.lat - latitude) > 0.00001 || Math.abs(currentMarkerLatLng.lng - longitude) > 0.00001) {
+          marker.setLatLng([latitude, longitude]);
+          map.setView([latitude, longitude], map.getZoom());
+        }
+      }
+    }
+  }, [step, locationHook.coords]);
+
+  // Clean up map instance on component unmount
+  useEffect(() => {
+    return () => {
+      if (reportMapInstanceRef.current) {
+        reportMapInstanceRef.current.remove();
+        reportMapInstanceRef.current = null;
+        reportMarkerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleCameraStart = async () => {
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -104,12 +209,12 @@ export default function ReportIssue() {
   };
 
   const aiStages = [
-    { name: 'Vision Agent', desc: 'Analyzing image details & identifying issue...' },
-    { name: 'Categorization Agent', desc: 'Standardizing category rules...' },
-    { name: 'Priority Agent', desc: 'Calculating safety severity levels...' },
-    { name: 'Routing Agent', desc: 'Assigning responsible municipal division...' },
-    { name: 'Duplicate Agent', desc: 'Scanning nearby reported issues...' },
-    { name: 'Summary Agent', desc: 'Generating factual official summary logs...' }
+    { name: 'Vision Agent', desc: 'Analyzing image details & identifying issue...', icon: 'Eye' },
+    { name: 'Categorization Agent', desc: 'Standardizing category rules...', icon: 'Tags' },
+    { name: 'Priority Agent', desc: 'Calculating safety severity levels...', icon: 'AlertTriangle' },
+    { name: 'Routing Agent', desc: 'Assigning responsible municipal division...', icon: 'Send' },
+    { name: 'Duplicate Agent', desc: 'Scanning nearby reported issues...', icon: 'Layers' },
+    { name: 'Summary Agent', desc: 'Generating factual official summary logs...', icon: 'FileText' }
   ];
 
   // Step 1 handlers
@@ -448,37 +553,35 @@ export default function ReportIssue() {
             subtitle="Report potholes, leaks, or broken streetlights in under 10 seconds. AI handles routing." 
           />
 
-          <div className="flex flex-col gap-5 pt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-4">
             <button
+              type="button"
               onClick={handleCameraStart}
-              className="flex items-center gap-4 bg-primary-blue hover:bg-primary-dark text-white p-6 rounded-2xl shadow-premium hover:shadow-lg transition-all text-left min-h-[80px] w-full select-none cursor-pointer border-0"
+              className="flex flex-col items-center justify-center p-8 bg-primary-blue hover:bg-primary-dark text-white rounded-3xl shadow-premium hover:shadow-xl hover:scale-[1.01] transition-all text-center min-h-[160px] w-full select-none cursor-pointer border-0 group"
             >
-              <div className="p-3 bg-white/10 rounded-xl">
+              <div className="p-4 bg-white/10 rounded-2xl mb-4 group-hover:scale-105 transition-transform">
                 <Camera className="w-8 h-8 text-white" />
               </div>
-              <div>
-                <h3 className="text-lg font-bold font-title leading-tight">Take Photo</h3>
-                <p className="text-xs text-blue-100/80 mt-1">Capture the issue with your phone camera</p>
-              </div>
+              <h3 className="text-lg font-black font-title leading-tight">Take Incident Photo</h3>
+              <p className="text-xs text-blue-100/70 mt-1.5 max-w-[200px]">Capture pothole, debris or leaks using your device camera</p>
             </button>
 
             <button
+              type="button"
               onClick={() => triggerFileSelect(false)}
-              className="flex items-center gap-4 bg-white hover:bg-slate-50 text-slate-800 p-6 rounded-2xl border border-slate-100/90 shadow-premium hover:shadow-lg transition-all text-left min-h-[80px] w-full select-none cursor-pointer"
+              className="flex flex-col items-center justify-center p-8 bg-white hover:bg-slate-50/50 text-slate-800 rounded-3xl border border-slate-150 shadow-premium hover:shadow-xl hover:scale-[1.01] transition-all text-center min-h-[160px] w-full select-none cursor-pointer group"
             >
-              <div className="p-3 bg-slate-100 rounded-xl text-slate-600">
-                <ImageIcon className="w-8 h-8" />
+              <div className="p-4 bg-slate-50 group-hover:bg-slate-100 rounded-2xl mb-4 text-slate-650 group-hover:scale-105 transition-transform border border-slate-100">
+                <ImageIcon className="w-8 h-8 text-slate-600" />
               </div>
-              <div>
-                <h3 className="text-lg font-bold font-title leading-tight">Upload From Gallery</h3>
-                <p className="text-xs text-slate-500 mt-1">Select an existing photo from device memory</p>
-              </div>
+              <h3 className="text-lg font-black font-title leading-tight">Upload from Gallery</h3>
+              <p className="text-xs text-slate-500 mt-1.5 max-w-[200px]">Select an existing image attachment from local storage</p>
             </button>
           </div>
 
           <div className="relative my-8 flex items-center">
             <div className="flex-grow border-t border-slate-100"></div>
-            <span className="flex-shrink mx-4 text-[10px] text-slate-400 font-bold uppercase tracking-wider">Review Simulator</span>
+            <span className="flex-shrink mx-4 text-xs text-slate-400 font-bold uppercase tracking-wider">Review Simulator</span>
             <div className="flex-grow border-t border-slate-100"></div>
           </div>
 
@@ -522,27 +625,38 @@ export default function ReportIssue() {
             </div>
             
             <div className="sm:col-span-7 flex flex-col justify-between gap-3">
-              <Card className="flex-grow flex flex-col justify-center gap-3 border-slate-100 p-4">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Location Status</span>
+              <Card className={`flex-grow flex flex-col justify-center gap-3 p-5 transition-all ${
+                !locationHook.loading && !locationHook.error && locationHook.coords
+                  ? 'border-emerald-250 bg-emerald-50/10 shadow-sm'
+                  : 'border-slate-100'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Location Status</span>
+                  {!locationHook.loading && !locationHook.error && locationHook.coords && (
+                    <span className="text-[10px] font-black text-emerald-600 bg-emerald-100/60 px-2 py-0.5 rounded-md border border-emerald-200/50 flex items-center gap-1 uppercase tracking-wide">
+                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" /> Location Verified
+                    </span>
+                  )}
+                </div>
                 
                 {locationHook.loading ? (
-                  <div className="flex items-center gap-2 text-xs text-primary-blue font-semibold animate-pulse py-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                  <div className="flex items-center gap-2.5 text-sm text-primary-blue font-bold animate-pulse py-2.5">
+                    <Loader2 className="w-4 h-4 animate-spin text-primary-blue" />
                     Fetching GPS coordinates...
                   </div>
                 ) : locationHook.error ? (
-                  <div className="space-y-3">
-                    <p className="text-xs text-danger-red font-medium leading-relaxed">
-                      ❌ GPS failed: {locationHook.error}
+                  <div className="space-y-3 text-left">
+                    <p className="text-sm text-danger-red font-bold leading-relaxed flex items-center gap-1.5">
+                      ⚠️ GPS Failed: {locationHook.error}
                     </p>
-                    <p className="text-[10px] text-slate-400">Please tap a neighborhood preset below to set location manually:</p>
-                    <div className="flex flex-wrap gap-1.5 pt-1">
+                    <p className="text-xs text-slate-500 font-semibold">Select a preset sector location manually:</p>
+                    <div className="flex flex-wrap gap-2 pt-1">
                       {['Indiranagar', 'MG Road', 'Gandhi Nagar', 'Market Area'].map((hood) => (
                         <button
                           key={hood}
                           type="button"
                           onClick={() => locationHook.setManualLocation(hood)}
-                          className="px-2.5 py-1 text-[10px] bg-slate-100 hover:bg-primary-light hover:text-primary-blue text-slate-600 rounded-full border border-slate-200/50 transition-colors cursor-pointer"
+                          className="px-3.5 py-1.5 text-xs bg-white hover:bg-primary-light hover:text-primary-blue text-slate-700 font-extrabold rounded-xl border border-slate-200 hover:border-primary-blue/30 transition-all cursor-pointer"
                         >
                           {hood}
                         </button>
@@ -550,21 +664,33 @@ export default function ReportIssue() {
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-slate-800 leading-relaxed">
-                      📍 {locationHook.address}
-                    </p>
-                    {locationHook.coords && (
-                      <p className="text-[10px] text-slate-400 font-mono">
-                        Lat: {locationHook.coords.latitude.toFixed(6)}, Lng: {locationHook.coords.longitude.toFixed(6)}
-                      </p>
-                    )}
+                  <div className="space-y-3 text-left">
+                    <div className="flex items-start gap-2 pt-1 select-all">
+                      <span className="text-lg shrink-0 mt-0.5">📍</span>
+                      <div>
+                        <p className="text-sm font-extrabold text-slate-900 leading-snug">
+                          {locationHook.address}
+                        </p>
+                        {locationHook.coords && (
+                          <p className="text-[10px] text-slate-450 font-mono mt-1 font-semibold">
+                            Coordinates: {locationHook.coords.latitude.toFixed(6)}, {locationHook.coords.longitude.toFixed(6)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Accuracy and Source block */}
+                    <div className="flex justify-between items-center text-[10px] font-bold text-slate-450 pt-2 border-t border-slate-100">
+                      <span>Source: <strong className="text-slate-650 font-extrabold">{locationHook.coords?.latitude === 12.9719 || locationHook.coords?.latitude === 12.9743 || locationHook.coords?.latitude === 12.9815 || locationHook.coords?.latitude === 12.9620 ? 'Manual Preset' : 'GPS Sensor'}</strong></span>
+                      <span>Accuracy: <strong className="text-emerald-600 font-extrabold">{locationHook.coords?.latitude === 12.9719 || locationHook.coords?.latitude === 12.9743 || locationHook.coords?.latitude === 12.9815 || locationHook.coords?.latitude === 12.9620 ? 'Approximate (Preset)' : 'High (± 5m)'}</strong></span>
+                    </div>
+
                     <button
                       type="button"
                       onClick={locationHook.fetchLocation}
-                      className="text-[10px] text-primary-blue hover:underline font-bold flex items-center gap-1 cursor-pointer pt-1 border-0 bg-transparent"
+                      className="text-xs text-primary-blue hover:text-primary-dark font-black flex items-center gap-1.5 cursor-pointer pt-1 bg-transparent border-0"
                     >
-                      <RefreshCw className="w-3 h-3" /> Re-detect Location
+                      <RefreshCw className="w-3.5 h-3.5" /> Re-detect Location
                     </button>
                   </div>
                 )}
@@ -572,9 +698,46 @@ export default function ReportIssue() {
             </div>
           </div>
 
+          <style>{`
+            .leaflet-container {
+              font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+            }
+            .leaflet-bar {
+              border: none !important;
+              box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.1) !important;
+              border-radius: 12px !important;
+              overflow: hidden;
+            }
+            .leaflet-bar a {
+              background-color: #ffffff !important;
+              border-bottom: 1px solid #f1f5f9 !important;
+              color: #475569 !important;
+              transition: all 0.2s;
+            }
+            .leaflet-bar a:hover {
+              background-color: #f8fafc !important;
+              color: #1e293b !important;
+            }
+            .custom-report-icon {
+              background: transparent !important;
+              border: none !important;
+            }
+          `}</style>
+
+          {locationHook.coords && (
+            <Card className="p-4 border-slate-100 shadow-sm relative space-y-3 animate-fadeIn">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                🗺️ Location Map Picker (Drag pin or click map to refine location)
+              </span>
+              <div className="aspect-[16/9] sm:aspect-[21/9] bg-slate-100 rounded-2xl border border-slate-200/80 overflow-hidden relative">
+                <div ref={reportMapContainerRef} className="w-full h-full z-0" />
+              </div>
+            </Card>
+          )}
+
           <Card className="p-5 border-slate-100 shadow-sm space-y-4">
             <div className="flex justify-between items-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Voice or Text Notes (Optional)</span>
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Voice or Text Notes (Optional)</span>
               {speechHook.supported && (
                 <button
                   type="button"
@@ -582,7 +745,7 @@ export default function ReportIssue() {
                     setTypeManually(!typeManually);
                     speechHook.resetTranscript();
                   }}
-                  className="text-[10px] font-bold text-primary-blue hover:underline cursor-pointer border-0 bg-transparent"
+                  className="text-xs font-bold text-primary-blue hover:underline cursor-pointer border-0 bg-transparent"
                 >
                   {typeManually ? 'Use Voice Input' : 'Type Instead'}
                 </button>
@@ -594,7 +757,7 @@ export default function ReportIssue() {
                 value={manualText}
                 onChange={(e) => setManualText(e.target.value)}
                 placeholder="Briefly explain what you saw (e.g., Water main pipe burst on the corner sidewalk)."
-                className="w-full min-h-[100px] border border-slate-200/80 rounded-2xl p-4 text-xs focus:outline-none focus:ring-2 focus:ring-primary-blue/30 focus:border-primary-blue text-slate-800"
+                className="w-full min-h-[100px] border border-slate-200/80 rounded-2xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue/30 focus:border-primary-blue text-slate-800"
               />
             ) : (
               <div className="flex flex-col items-center justify-center p-4 bg-slate-50/50 rounded-2xl border border-slate-100 text-center gap-3">
@@ -610,16 +773,16 @@ export default function ReportIssue() {
                   {speechHook.isListening ? <MicOff className="w-6 h-6 animate-pulse" /> : <Mic className="w-6 h-6" />}
                 </button>
                 <div>
-                  <h4 className="text-xs font-bold text-slate-700">
+                  <h4 className="text-sm font-bold text-slate-700">
                     {speechHook.isListening ? 'Listening... Speak now' : 'Tap to Speak'}
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-1 leading-relaxed max-w-xs mx-auto min-h-[16px]">
+                  <p className="text-xs text-slate-500 mt-1.5 leading-relaxed max-w-xs mx-auto min-h-[16px]">
                     {speechHook.transcript ? `"${speechHook.transcript}"` : 'AI will automatically transcribe your voice description.'}
                   </p>
                 </div>
                 
                 {speechHook.error && (
-                  <p className="text-[10px] text-rose-500 font-semibold">{speechHook.error}</p>
+                  <p className="text-xs text-rose-500 font-semibold">{speechHook.error}</p>
                 )}
               </div>
             )}
@@ -669,27 +832,64 @@ export default function ReportIssue() {
           </div>
 
           {/* Steps Display */}
-          <Card className="border-slate-100 p-5 shadow-sm text-left divide-y divide-slate-50">
+          <Card className="border-slate-100 p-5 shadow-premium rounded-3xl text-left divide-y divide-slate-150/60 bg-white">
             {aiStages.map((stage, idx) => {
               const isActive = aiStage === idx;
               const isDone = aiStage > idx;
+              
+              // Define dynamic classes based on status
+              const containerClass = isDone 
+                ? 'bg-emerald-50/40 text-emerald-800 border-emerald-100/50' 
+                : isActive 
+                  ? 'bg-blue-50/70 border-blue-150 text-blue-700 shadow-sm ring-2 ring-blue-50/50 animate-pulse' 
+                  : 'bg-slate-50/30 text-slate-400 border-slate-100 opacity-60';
+              
+              const textClass = isActive 
+                ? 'text-primary-blue font-extrabold' 
+                : isDone 
+                  ? 'text-slate-855 font-bold' 
+                  : 'text-slate-400 font-medium';
+
               return (
-                <div key={idx} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                  <div className="mt-0.5 shrink-0">
-                    {isDone ? (
-                      <span className="text-emerald-500 font-bold text-xs">✓</span>
-                    ) : isActive ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-primary-blue" />
-                    ) : (
-                      <span className="w-3.5 h-3.5 rounded-full border border-slate-200 block bg-slate-50"></span>
-                    )}
+                <div key={idx} className={`flex items-center justify-between p-3.5 my-1.5 rounded-2xl border transition-all duration-300 ${containerClass}`}>
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    {/* Circle icon container */}
+                    <div className="w-8.5 h-8.5 rounded-xl flex items-center justify-center shrink-0 border bg-white shadow-sm">
+                      {isDone ? (
+                        <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 fill-emerald-50/20" />
+                      ) : (
+                        getStageIcon(stage.icon, isActive ? 'text-primary-blue animate-pulse' : 'text-slate-400')
+                      )}
+                    </div>
+                    
+                    <div className="min-w-0 text-left">
+                      <h4 className={`text-xs uppercase tracking-wider ${textClass}`}>
+                        {stage.name}
+                      </h4>
+                      {(isActive || isDone) && (
+                        <p className="text-[10px] text-slate-500 mt-0.5 leading-snug font-medium">
+                          {isDone ? 'Process completed successfully.' : stage.desc}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <h4 className={`text-xs font-bold ${isActive ? 'text-primary-blue' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
-                      {stage.name}
-                    </h4>
-                    {isActive && (
-                      <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">{stage.desc}</p>
+
+                  {/* Right hand progress indicator */}
+                  <div className="shrink-0 pl-2">
+                    {isActive ? (
+                      <div className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    ) : isDone ? (
+                      <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                        OK
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-bold text-slate-350 bg-slate-100/50 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                        Pending
+                      </span>
                     )}
                   </div>
                 </div>
@@ -747,6 +947,16 @@ export default function ReportIssue() {
               Your issue has been logged. AI has verified, categorized, and dispatched it directly to departments.
             </p>
           </div>
+
+          {/* Short AI Report Summary */}
+          {submitResult.aiAnalysis?.summary && (
+            <div className="p-4 border-2 border-indigo-150/60 bg-gradient-to-br from-indigo-50/20 via-white to-slate-50/30 shadow-sm rounded-2xl text-left space-y-1.5 ring-4 ring-indigo-50/15">
+              <span className="text-[9px] font-black text-indigo-650 uppercase tracking-widest block bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100/30 w-fit">🤖 AI Vision & Routing Report</span>
+              <p className="text-[11px] text-slate-650 leading-relaxed font-semibold">
+                {submitResult.aiAnalysis.summary}
+              </p>
+            </div>
+          )}
 
           {/* Ticket Information Card */}
           <Card className="p-4 border-slate-100 shadow-sm bg-slate-50/50 flex flex-col gap-2.5">

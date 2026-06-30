@@ -23,7 +23,9 @@ import {
   ChevronRight,
   Activity,
   Award,
-  Trophy
+  Trophy,
+  CheckCircle,
+  AlertTriangle
 } from 'lucide-react';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
@@ -48,6 +50,19 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
   useEffect(() => {
     setCurrentTab(defaultTab);
   }, [defaultTab]);
+
+  // Global search hotkey listener
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const input = document.querySelector('input[placeholder*="Search"]');
+        input?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Listen to all reports in real-time
   const allIssues = useFirestoreListener();
@@ -94,7 +109,17 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
       .slice(0, 4);
   };
 
-  const dynamicActivities = getActivityStream();
+  const dynamicActivities = getActivityStream().filter(act => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      act.actor.toLowerCase().includes(query) ||
+      act.title.toLowerCase().includes(query) ||
+      act.category.toLowerCase().includes(query) ||
+      act.location.toLowerCase().includes(query) ||
+      act.description.toLowerCase().includes(query)
+    );
+  });
 
   const sidebarLinks = [
     { label: 'Dashboard', path: '/home', icon: LayoutDashboard },
@@ -112,9 +137,9 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
       case 'Report Issue':
         return <ReportIssue />;
       case 'My Reports':
-        return <Timeline />;
+        return <Timeline searchQuery={searchQuery} />;
       case 'Community Map':
-        return <CommunityMap />;
+        return <CommunityMap searchQuery={searchQuery} />;
       case 'Profile & Badges':
         return <Profile />;
       case 'Dashboard':
@@ -197,35 +222,75 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
               
               {/* Left Column: Stats overview */}
               <div className="md:col-span-4 grid grid-cols-1 gap-4">
-                <Card className="p-6 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
+                {/* Active Issues Card */}
+                <Card className="p-5 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
                   <div className="flex justify-between items-start">
                     <div className="space-y-1">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Reports Logged</span>
-                      <h4 className="text-3xl font-black text-slate-900 pt-1.5">{currentUserReports.length} Reports</h4>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Active Issues</span>
+                      <h4 className="text-2xl font-black text-slate-900 pt-1">
+                        {currentUserReports.filter(i => i.status !== 'Resolved').length} Active
+                      </h4>
                     </div>
-                    <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
-                      <ClipboardList className="w-5 h-5" />
+                    <div className="w-8.5 h-8.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0">
+                      <ClipboardList className="w-4.5 h-4.5" />
                     </div>
                   </div>
                   <button 
                     onClick={() => navigate('/timeline')}
-                    className="text-xs font-bold text-blue-600 hover:underline mt-6 text-left cursor-pointer"
+                    className="text-xs font-bold text-blue-600 hover:underline mt-4 text-left cursor-pointer border-0 bg-transparent p-0"
                   >
-                    View my report timeline →
+                    Track active timeline →
                   </button>
                 </Card>
 
-                <Card className="p-6 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
+                {/* Resolved Issues Card */}
+                <Card className="p-5 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Resolved Issues</span>
+                      <h4 className="text-2xl font-black text-slate-900 pt-1">
+                        {currentUserReports.filter(i => i.status === 'Resolved').length} Resolved
+                      </h4>
+                    </div>
+                    <div className="w-8.5 h-8.5 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0">
+                      <CheckCircle className="w-4.5 h-4.5" />
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400 mt-4 block uppercase tracking-wider">
+                    Completed Resolutions
+                  </span>
+                </Card>
+
+                {/* Pending Verification Card */}
+                <Card className="p-5 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Pending Verification</span>
+                      <h4 className="text-2xl font-black text-slate-900 pt-1">
+                        {currentUserReports.filter(i => !i.communityVerified && i.status !== 'Resolved').length} Pending
+                      </h4>
+                    </div>
+                    <div className="w-8.5 h-8.5 rounded-lg bg-purple-50 text-purple-600 border border-purple-100 flex items-center justify-center shrink-0">
+                      <AlertTriangle className="w-4.5 h-4.5" />
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400 mt-4 block tracking-wider">
+                    Awaiting peer validation
+                  </span>
+                </Card>
+
+                {/* Impact Points Card */}
+                <Card className="p-5 bg-white border-slate-100 text-left flex flex-col justify-between hover:shadow-premium transition-all duration-300">
                   <div className="flex justify-between items-start">
                     <div className="space-y-1">
                       <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Impact Points</span>
-                      <h4 className="text-3xl font-black text-slate-900 pt-1.5">{user?.points || 0} pts</h4>
+                      <h4 className="text-2xl font-black text-slate-900 pt-1">{user?.points || 0} pts</h4>
                     </div>
-                    <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100">
-                      <Award className="w-5 h-5" />
+                    <div className="w-8.5 h-8.5 rounded-lg bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0">
+                      <Award className="w-4.5 h-4.5" />
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold text-slate-400 mt-6 block uppercase tracking-wider">
+                  <span className="text-[10px] font-bold text-slate-400 mt-4 block uppercase tracking-wider">
                     Badge: Lead Reporter
                   </span>
                 </Card>
@@ -400,7 +465,12 @@ export default function Home({ user: initialUser, defaultTab = 'Dashboard' }) {
               type="text"
               placeholder="Search reports, locations..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value && currentTab !== 'My Reports' && currentTab !== 'Community Map') {
+                  setCurrentTab('My Reports');
+                }
+              }}
               className="w-full pl-10 pr-12 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-slate-700 bg-slate-50/50"
             />
             {/* Keyboard shortcut */}

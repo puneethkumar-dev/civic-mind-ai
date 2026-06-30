@@ -10,11 +10,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
+import Button from '../components/Button';
 import EmptyState from '../components/EmptyState';
 import LoadingState from '../components/LoadingState';
 import { API_URL } from '../config/api';
 
-export default function Timeline() {
+export default function Timeline({ searchQuery = '' }) {
   const navigate = useNavigate();
   const { user, updateUserPoints } = useAuth();
 
@@ -24,9 +25,22 @@ export default function Timeline() {
   // Filter sidebar to show only issues filed by the logged-in user
   const userReports = allReports.filter(r => r.reportedBy?.uid === user?.uid);
 
+  const [ticketFilter, setTicketFilter] = useState('mine'); // 'mine' or 'all'
+  const filteredReports = (ticketFilter === 'mine' ? userReports : allReports).filter(r => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      r.trackingId?.toLowerCase().includes(query) ||
+      (r.aiAnalysis?.category || r.category || '').toLowerCase().includes(query) ||
+      (r.location?.address || '').toLowerCase().includes(query) ||
+      (r.description || '').toLowerCase().includes(query)
+    );
+  });
+
   const [activeReportId, setActiveReportId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const [selectedModalReport, setSelectedModalReport] = useState(null);
 
   // Read issue ID query parameter if navigated from home page
   useEffect(() => {
@@ -38,9 +52,20 @@ export default function Timeline() {
   }, []);
 
   useEffect(() => {
-    if (allReports) {
+    if (allReports && allReports.length > 0) {
       setLoading(false);
-      if (allReports.length > 0 && !activeReportId) {
+
+      // Auto-open modal if navigated from outside with a specific ticket ID
+      const params = new URLSearchParams(window.location.search);
+      const queryId = params.get('id');
+      if (queryId && !selectedModalReport) {
+        const found = allReports.find(r => r.issueId === queryId);
+        if (found) {
+          setSelectedModalReport(found);
+        }
+      }
+
+      if (!activeReportId) {
         // Default to user's first report if available, else first general report
         if (userReports.length > 0) {
           setActiveReportId(userReports[0].issueId);
@@ -48,6 +73,8 @@ export default function Timeline() {
           setActiveReportId(allReports[0].issueId);
         }
       }
+    } else if (allReports) {
+      setLoading(false);
     }
   }, [allReports, activeReportId, userReports]);
 
@@ -284,18 +311,46 @@ export default function Timeline() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Side: Ticket selector */}
         <div className="lg:col-span-5 space-y-4 w-full">
-          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider px-1">Your Filed Tickets</h3>
+          {/* Switcher Tab */}
+          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100/80 rounded-xl border border-slate-200/50 select-none">
+            <button
+              type="button"
+              onClick={() => setTicketFilter('mine')}
+              className={`py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                ticketFilter === 'mine'
+                  ? 'bg-white text-slate-900 shadow-sm border border-slate-200/20'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              My Filed Tickets
+            </button>
+            <button
+              type="button"
+              onClick={() => setTicketFilter('all')}
+              className={`py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                ticketFilter === 'all'
+                  ? 'bg-white text-slate-900 shadow-sm border border-slate-200/20'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Community Feed
+            </button>
+          </div>
+
           <div className="space-y-3">
-            {userReports.length > 0 ? (
-              userReports.map((report) => (
+            {filteredReports.length > 0 ? (
+              filteredReports.map((report) => (
                 <Card
                   key={report.issueId}
-                  onClick={() => setActiveReportId(report.issueId)}
+                  onClick={() => {
+                    setActiveReportId(report.issueId);
+                    setSelectedModalReport(report);
+                  }}
                   hoverEffect={activeReportId !== report.issueId}
-                  className={`border-l-4 transition-all w-full select-none cursor-pointer flex gap-4 p-4 ${
+                  className={`border-l-4 transition-all duration-300 w-full select-none cursor-pointer flex gap-4 p-4 hover:shadow-premium hover:-translate-y-[2px] ${
                     activeReportId === report.issueId
-                      ? 'border-l-primary-blue bg-blue-50/10 shadow-md ring-1 ring-primary-blue/5'
-                      : 'border-l-slate-200 hover:border-l-primary-blue/40'
+                      ? 'border-l-primary-blue bg-blue-50/10 shadow-premium ring-1 ring-primary-blue/5'
+                      : 'border-l-slate-250 hover:border-l-primary-blue/50 hover:bg-slate-50/30 shadow-sm'
                   }`}
                 >
                   {/* Left Side: Thumbnail Attachment */}
@@ -344,80 +399,34 @@ export default function Timeline() {
                 </Card>
               ))
             ) : (
-              <div className="text-center py-6 bg-slate-50 rounded-2xl border border-dashed text-xs text-slate-400 font-semibold">
-                You haven't filed any tickets yet.
+              <div className="text-center py-8 bg-slate-50/50 rounded-3xl border border-dashed border-slate-200/60 text-xs text-slate-450 font-bold select-none p-6">
+                {ticketFilter === 'mine' 
+                  ? "You haven't filed any tickets yet." 
+                  : "No community reports found."}
               </div>
             )}
           </div>
         </div>
 
-        {/* Right Side: Timeline Steps list */}
+        {/* Right Side: Community Verification only */}
         <div className="lg:col-span-7 w-full">
           {activeReport ? (
-            <Card className="p-6 border-slate-100 shadow-md space-y-5">
-              {/* Header Details */}
-              <div className="space-y-4 pb-6 border-b border-slate-100">
-                <div className="flex justify-between items-center gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-mono font-bold text-slate-400">{activeReport.trackingId}</span>
-                    {activeReport.aiAnalysis?.severity ? (
-                      <Badge status={activeReport.aiAnalysis.severity} />
-                    ) : (
-                      <Badge status="Awaiting AI" />
-                    )}
-                    {activeReport.aiAnalysis?.category && (
-                      <Badge status={activeReport.aiAnalysis.category} />
-                    )}
-                    {activeReport.communityVerified && (
-                      <Badge status="Community Verified" />
-                    )}
-                  </div>
-                  <Badge status={activeReport.status} />
+            <Card className="p-6 border-slate-100 shadow-md space-y-5 text-left">
+              {/* Compact Ticket Header Reference */}
+              <div className="pb-4 border-b border-slate-100 flex items-center justify-between gap-4 flex-wrap select-none">
+                <div className="space-y-1 min-w-0">
+                  <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded border">
+                    {activeReport.trackingId}
+                  </span>
+                  <h3 className="font-extrabold text-slate-800 text-base line-clamp-1">{getIssueTitle(activeReport)}</h3>
                 </div>
-                <div className="space-y-2">
-                  <h3 className="text-lg sm:text-xl font-bold text-slate-900 font-title">{getIssueTitle(activeReport)}</h3>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-400">
-                    <span className="flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-                      {activeReport.location?.address || 'Captured Location'}
-                    </span>
-                    {activeReport.aiAnalysis?.department && (
-                      <span className="flex items-center gap-1 text-slate-500 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
-                        <span>Assigned to: <strong>{activeReport.aiAnalysis.department} Department</strong></span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {activeReport.imageReference && (
-                  <div className="w-full max-h-[220px] bg-slate-50 rounded-2xl overflow-hidden border border-slate-100/50 aspect-video relative flex items-center justify-center">
-                    <img 
-                      src={getImageUrl(activeReport.imageReference, activeReport.aiAnalysis?.category || activeReport.category)} 
-                      alt="Issue Attachment" 
-                      className="w-full h-full object-cover" 
-                      onError={(e) => {
-                        e.target.src = 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=500&q=80';
-                      }}
-                    />
-                  </div>
-                )}
-                <div className="space-y-3">
-                  <div className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3.5 rounded-xl border border-slate-100/50">
-                    <span className="block font-bold text-slate-700 mb-1">Citizen Description:</span>
-                    {activeReport.description || 'No description notes provided.'}
-                  </div>
-                  {activeReport.aiAnalysis?.summary && (
-                    <div className="bg-blue-50/20 border border-blue-100/30 p-3.5 rounded-xl space-y-2">
-                      <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700 font-title">
-                        <Sparkles className="w-3.5 h-3.5 fill-current text-blue-500" />
-                        <span>AI Official Summary</span>
-                      </div>
-                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                        {activeReport.aiAnalysis.summary}
-                      </p>
-                    </div>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedModalReport(activeReport)}
+                  className="px-3.5 py-2 text-xs font-bold bg-primary-light hover:bg-primary-blue hover:text-white text-primary-blue rounded-xl border border-primary-blue/20 transition-all cursor-pointer flex items-center gap-1"
+                >
+                  👁️ View Report Details
+                </button>
               </div>
 
               {/* Collaborative Validation Panel (Community Verification) */}
@@ -474,6 +483,28 @@ export default function Timeline() {
                           <div className="flex items-baseline gap-0.5 text-slate-850">
                             <span className="text-xl font-extrabold font-title">{confidence}%</span>
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Prominent Confidence Progress Bar */}
+                      <div className="space-y-1.5 text-left bg-white p-3 rounded-xl border border-slate-100 select-none">
+                        <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          <span>Verification Confidence</span>
+                          <span className={confidence >= 70 ? 'text-emerald-600 font-extrabold' : confidence >= 40 ? 'text-amber-600 font-extrabold' : 'text-rose-500 font-extrabold'}>
+                            {confidence}% {confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Needs Votes'}
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/50 p-0.5">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-500 shadow-sm ${
+                              confidence >= 70 
+                                ? 'bg-gradient-to-r from-emerald-500 to-teal-500' 
+                                : confidence >= 40 
+                                  ? 'bg-gradient-to-r from-amber-500 to-orange-400' 
+                                  : 'bg-gradient-to-r from-rose-500 to-pink-500'
+                            }`}
+                            style={{ width: `${confidence}%` }}
+                          />
                         </div>
                       </div>
 
@@ -565,59 +596,171 @@ export default function Timeline() {
                   )}
                 </div>
               </div>
-
-              {/* Vertical Steps */}
-              <div className="pt-4 relative pl-6 space-y-6">
-                {/* Vertical line connector */}
-                <div className="absolute left-[30px] top-8 bottom-8 w-0.5 bg-slate-100" />
-
-                {getTimelineSteps(activeReport).map((step, idx) => {
-                  const isDone = step.status === 'done';
-                  const isActive = step.status === 'active';
-                  const IconComponent = getTimelineIcon(step.title);
-                  
-                  return (
-                    <div key={idx} className="relative flex items-start gap-4">
-                      {/* Circle Pin indicator */}
-                      <div className="absolute -left-[5px] mt-0.5 z-10 flex items-center justify-center">
-                        {isDone ? (
-                          <div className="w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-sm">
-                            <IconComponent className="w-2.5 h-2.5" />
-                          </div>
-                        ) : isActive ? (
-                          <div className="w-4 h-4 rounded-full bg-primary-blue text-white flex items-center justify-center shadow-md animate-pulse">
-                            <IconComponent className="w-2.5 h-2.5 fill-current text-amber-200" />
-                          </div>
-                        ) : (
-                          <div className="w-4 h-4 rounded-full bg-slate-200 border-2 border-white flex items-center justify-center" />
-                        )}
-                      </div>
-
-                      {/* Step Content */}
-                      <div className="flex-1 bg-slate-50/30 border border-slate-100/50 p-4 rounded-2xl">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                          <h4 className={`text-sm font-bold ${isActive ? 'text-primary-blue font-semibold' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
-                            {step.title}
-                          </h4>
-                          <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            {step.date}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-505 mt-1.5 leading-relaxed text-slate-500">{step.desc}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </Card>
           ) : (
-            <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed text-slate-400 font-semibold text-sm">
-              Select a ticket to review timeline steps.
+            <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed text-slate-450 font-semibold text-sm p-6 select-none">
+              Select a ticket from the left to review or cast community verifications.
             </div>
           )}
         </div>
       </div>
+
+      {/* Ticket Details Modal Popup */}
+      <AnimatePresence>
+        {selectedModalReport && (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedModalReport(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            
+            {/* Modal Body */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-2xl w-full max-h-[85vh] overflow-y-auto relative z-10 flex flex-col focus:outline-none p-6"
+            >
+              {/* Header with Title and Close button */}
+              <div className="flex justify-between items-start gap-4 pb-4 border-b border-slate-100">
+                <div className="space-y-1.5 text-left">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-mono font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded border">{selectedModalReport.trackingId}</span>
+                    {selectedModalReport.aiAnalysis?.severity ? (
+                      <Badge status={selectedModalReport.aiAnalysis.severity} />
+                    ) : (
+                      <Badge status="Awaiting AI" />
+                    )}
+                    {selectedModalReport.aiAnalysis?.category && (
+                      <Badge status={selectedModalReport.aiAnalysis.category} />
+                    )}
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 font-title">{getIssueTitle(selectedModalReport)}</h3>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-slate-350 shrink-0" />
+                      {selectedModalReport.location?.address || 'Captured Location'}
+                    </span>
+                    {selectedModalReport.aiAnalysis?.department && (
+                      <span className="flex items-center gap-1 text-slate-600 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                        <span>Assigned: <strong>{selectedModalReport.aiAnalysis.department}</strong></span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Close Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedModalReport(null)}
+                  className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 hover:text-slate-700 transition-colors cursor-pointer border border-transparent hover:border-slate-100"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="py-4 space-y-4 text-left overflow-y-auto pr-1">
+                {selectedModalReport.imageReference && (
+                  <div className="w-full max-h-[300px] bg-slate-50 rounded-2xl overflow-hidden border border-slate-100/50 aspect-video relative flex items-center justify-center">
+                    <img 
+                      src={getImageUrl(selectedModalReport.imageReference, selectedModalReport.aiAnalysis?.category || selectedModalReport.category)} 
+                      alt="Issue Attachment" 
+                      className="w-full h-full object-cover" 
+                      onError={(e) => {
+                        e.target.src = 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=500&q=80';
+                      }}
+                    />
+                  </div>
+                )}
+                
+                <div className="space-y-3">
+                  <div className="text-sm text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100/50">
+                    <span className="block font-bold text-slate-800 mb-1">Citizen Description:</span>
+                    {selectedModalReport.description || 'No description notes provided.'}
+                  </div>
+                  
+                  {selectedModalReport.aiAnalysis?.summary && (
+                    <div className="bg-blue-50/20 border border-blue-100/35 p-4 rounded-xl space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700 font-title">
+                        <Sparkles className="w-3.5 h-3.5 fill-current text-blue-500" />
+                        <span>AI Official Summary</span>
+                      </div>
+                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-medium">
+                        {selectedModalReport.aiAnalysis.summary}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Vertical Timeline Steps in modal */}
+                <div className="border-t border-slate-100 pt-4">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Ticket Status Timeline</h4>
+                  <div className="relative pl-6 space-y-5">
+                    {/* Vertical line connector */}
+                    <div className="absolute left-[30px] top-6 bottom-6 w-0.5 bg-slate-100" />
+
+                    {getTimelineSteps(selectedModalReport).map((step, idx) => {
+                      const isDone = step.status === 'done';
+                      const isActive = step.status === 'active';
+                      const IconComponent = getTimelineIcon(step.title);
+                      
+                      return (
+                        <div key={idx} className="relative flex items-start gap-4">
+                          <div className="absolute -left-[5px] mt-0.5 z-10 flex items-center justify-center">
+                            {isDone ? (
+                              <div className="w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-sm">
+                                <IconComponent className="w-2.5 h-2.5" />
+                              </div>
+                            ) : isActive ? (
+                              <div className="w-4 h-4 rounded-full bg-primary-blue text-white flex items-center justify-center shadow-md animate-pulse">
+                                <IconComponent className="w-2.5 h-2.5 fill-current text-amber-200" />
+                              </div>
+                            ) : (
+                              <div className="w-4 h-4 rounded-full bg-slate-200 border-2 border-white flex items-center justify-center" />
+                            )}
+                          </div>
+
+                          <div className="flex-1 bg-slate-50/20 border border-slate-100/50 p-4 rounded-2xl">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                              <h4 className={`text-sm font-bold ${isActive ? 'text-primary-blue font-semibold' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
+                                {step.title}
+                              </h4>
+                              <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+                                <Clock className="w-3 h-3 shrink-0" />
+                                {step.date}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{step.desc}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Modal Footer */}
+              <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setSelectedModalReport(null)}
+                  className="px-6 py-2 text-xs font-semibold"
+                >
+                  Close details
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {toast && (
           <motion.div

@@ -39,6 +39,25 @@ export function useLocation() {
     setError(null);
   }, []);
 
+  const updateCoordinates = useCallback(async (latitude, longitude) => {
+    setLoading(true);
+    setError(null);
+    const position = { latitude, longitude };
+    setCoords(position);
+    try {
+      const addr = await reverseGeocode(latitude, longitude);
+      setAddress(addr);
+      return { coords: position, address: addr };
+    } catch (err) {
+      console.error('Error reverse geocoding custom coordinates:', err);
+      const fallbackAddr = `GPS: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      setAddress(fallbackAddr);
+      return { coords: position, address: fallbackAddr };
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const resetLocation = useCallback(() => {
     setCoords(null);
     setAddress('');
@@ -53,6 +72,7 @@ export function useLocation() {
     error,
     fetchLocation,
     setManualLocation,
+    updateCoordinates,
     resetLocation,
   };
 }

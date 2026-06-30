@@ -421,12 +421,12 @@ export default function Landing() {
             </div>
 
             {/* Step 1 Card */}
-            <div className="relative z-10 text-left">
+            <div className="relative z-10 text-left h-full">
               {/* Badge Number */}
               <div className="absolute top-[-14px] left-8 w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-extrabold shadow-md shadow-blue-500/20">
                 1
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] flex items-center gap-5 pt-8">
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] hover:shadow-[0_15px_35px_rgba(37,99,235,0.08)] hover:-translate-y-1 transition-all duration-300 flex items-center gap-5 pt-8 h-full">
                 <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100/30 shrink-0 shadow-sm">
                   <Camera className="w-5.5 h-5.5" />
                 </div>
@@ -438,12 +438,12 @@ export default function Landing() {
             </div>
 
             {/* Step 2 Card */}
-            <div className="relative z-10 text-left">
+            <div className="relative z-10 text-left h-full">
               {/* Badge Number */}
               <div className="absolute top-[-14px] left-8 w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-extrabold shadow-md shadow-indigo-500/20">
                 2
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] flex items-center gap-5 pt-8">
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] hover:shadow-[0_15px_35px_rgba(99,102,241,0.08)] hover:-translate-y-1 transition-all duration-300 flex items-center gap-5 pt-8 h-full">
                 <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100/30 shrink-0 shadow-sm">
                   <Cpu className="w-5.5 h-5.5" />
                 </div>
@@ -455,12 +455,12 @@ export default function Landing() {
             </div>
 
             {/* Step 3 Card */}
-            <div className="relative z-10 text-left">
+            <div className="relative z-10 text-left h-full">
               {/* Badge Number */}
               <div className="absolute top-[-14px] left-8 w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-extrabold shadow-md shadow-emerald-500/20">
                 3
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] flex items-center gap-5 pt-8">
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-[0_10px_30px_rgba(15,23,42,0.03)] hover:shadow-[0_15px_35px_rgba(16,185,129,0.08)] hover:-translate-y-1 transition-all duration-300 flex items-center gap-5 pt-8 h-full">
                 <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100/30 shrink-0 shadow-sm">
                   <Activity className="w-5.5 h-5.5" />
                 </div>

@@ -10,15 +10,26 @@ import CommunityMap from './pages/CommunityMap';
 import Profile from './pages/Profile';
 import AdminDashboard from './pages/AdminDashboard';
 import NotFound from './pages/NotFound';
+import LoadingState from './components/LoadingState';
 
 // Route guard helper
 const ProtectedRoute = ({ children, requireAdmin = false }) => {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-brand-bg w-full">
+        <LoadingState type="spinner" className="scale-110" />
+      </div>
+    );
+  }
   if (!user) {
     return <Navigate to="/login" replace />;
   }
   if (requireAdmin && user.role !== 'admin') {
     return <Navigate to="/home" replace />;
+  }
+  if (!requireAdmin && user.role === 'admin') {
+    return <Navigate to="/admin" replace />;
   }
   return children;
 };
@@ -31,7 +42,7 @@ function AppContent() {
       <Routes>
         <Route element={<AppLayout />}>
           {/* Public Routes */}
-          <Route path="/" element={user ? <Navigate to="/home" replace /> : <Landing />} />
+          <Route path="/" element={user ? <Navigate to={user.role === 'admin' ? '/admin' : '/home'} replace /> : <Landing />} />
           <Route 
             path="/login" 
             element={
@@ -64,7 +75,7 @@ function AppContent() {
           } />
           <Route path="/profile" element={
             <ProtectedRoute>
-              <Home user={user} defaultTab="Profile & Leaderboard" />
+              <Home user={user} defaultTab="Profile & Badges" />
             </ProtectedRoute>
           } />
 

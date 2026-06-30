@@ -49,6 +49,18 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterPriority, setFilterPriority] = useState('All');
   const [sortByConfidence, setSortByConfidence] = useState(false);
+  const [selectedIssueForDrawer, setSelectedIssueForDrawer] = useState(null);
+  const [showTechnicalInsights, setShowTechnicalInsights] = useState(false);
+  const [toast, setToast] = useState(null);
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const allIssues = useFirestoreListener();
 
@@ -81,6 +93,19 @@ export default function AdminDashboard() {
       fetchInsights();
     }
   }, [allIssues]);
+
+  // Global search hotkey listener
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const input = document.querySelector('input[placeholder*="Search"]');
+        input?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   
   // Dynamic Citizens list state
   const [citizens, setCitizens] = useState([
@@ -141,20 +166,8 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleManageTicket = async (issue) => {
-    const nextStatuses = {
-      'Reported': 'Assigned',
-      'AI Verified': 'Assigned',
-      'Awaiting Clarification': 'Assigned',
-      'Assigned': 'In Progress',
-      'In Progress': 'Resolved',
-      'Resolved': 'AI Verified'
-    };
-    const next = nextStatuses[issue.status] || 'Assigned';
-    const confirm = window.confirm(`Transition ticket ${issue.id} from "${issue.status}" to "${next}"?`);
-    if (confirm) {
-      await handleUpdateStatus(issue.issueId, next);
-    }
+  const handleManageTicket = (issue) => {
+    setSelectedIssueForDrawer(issue);
   };
 
   // Compute live statistics
@@ -163,11 +176,49 @@ export default function AdminDashboard() {
   const inProgressCount = allIssues.filter(i => i.status === 'In Progress' || i.status === 'Assigned').length;
   const resolvedCount = allIssues.filter(i => i.status === 'Resolved').length;
 
+  // Compute average resolution time from issue timelines
+  const getAverageResolutionTime = () => {
+    const resolvedIssues = allIssues.filter(i => {
+      if (i.status !== 'Resolved') return false;
+      const timeline = i.timeline || [];
+      return timeline.some(t => t.title === 'Resolved');
+    });
+
+    if (resolvedIssues.length === 0) return 'N/A';
+
+    let totalDurationMs = 0;
+    let counted = 0;
+    resolvedIssues.forEach(issue => {
+      const resolvedStep = issue.timeline.find(t => t.title === 'Resolved');
+      const start = new Date(issue.createdAt).getTime();
+      const end = new Date(resolvedStep.timestamp).getTime();
+      if (end >= start) {
+        totalDurationMs += (end - start);
+        counted++;
+      }
+    });
+
+    if (counted === 0) return 'N/A';
+    const avgMs = totalDurationMs / counted;
+    const avgHours = avgMs / (1000 * 60 * 60);
+
+    if (avgHours < 1) {
+      const avgMins = Math.max(1, Math.round(avgMs / (1000 * 60)));
+      return `${avgMins}m`;
+    }
+    if (avgHours < 24) {
+      return `${Math.round(avgHours)}h`;
+    }
+    const avgDays = Math.round(avgHours / 24);
+    return `${avgDays} ${avgDays === 1 ? 'day' : 'days'}`;
+  };
+
   const stats = [
     { title: 'Total Reports', value: String(totalCount), icon: BarChart3, trend: 'Live Telemetry', trendColor: 'text-emerald-500', lineColor: '#a855f7' },
     { title: 'Awaiting Action', value: String(awaitingCount), icon: Clock, trend: 'Needs Dispatch', trendColor: 'text-amber-500', lineColor: '#3b82f6' },
     { title: 'Work In Progress', value: String(inProgressCount), icon: ClipboardCheck, trend: 'Under Repair', trendColor: 'text-blue-500', lineColor: '#8b5cf6' },
     { title: 'Resolved (All Time)', value: String(resolvedCount), icon: CheckCircle, trend: 'Completed Tasks', trendColor: 'text-emerald-500', lineColor: '#10b981' },
+    { title: 'Avg. Resolution Time', value: getAverageResolutionTime(), icon: Clock, trend: 'Operational Speed', trendColor: 'text-blue-500', lineColor: '#3b82f6' },
   ];
 
   // Helper to format timestamps to relative time strings
@@ -184,18 +235,32 @@ export default function AdminDashboard() {
     return `${diffDays}d ago`;
   };
 
-  const recentIssues = allIssues.map(issue => ({
-    id: issue.trackingId || 'CM-XXXX',
-    issueId: issue.issueId,
-    title: issue.aiAnalysis?.summary || issue.description || 'Quick Report',
-    reporter: issue.reportedBy?.displayName || 'Citizen',
-    date: formatTimeAgo(issue.createdAt),
-    priority: issue.aiAnalysis?.severity || 'Medium',
-    status: issue.status || 'Reported',
-    dept: issue.aiAnalysis?.department || 'Municipality',
-    img: issue.imageReference || 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80',
-    rawIssue: issue
-  }));
+  const recentIssues = allIssues
+    .map(issue => ({
+      id: issue.trackingId || 'CM-XXXX',
+      issueId: issue.issueId,
+      title: issue.aiAnalysis?.summary || issue.description || 'Quick Report',
+      reporter: issue.reportedBy?.displayName || 'Citizen',
+      date: formatTimeAgo(issue.createdAt),
+      priority: issue.aiAnalysis?.severity || 'Medium',
+      status: issue.status || 'Reported',
+      dept: issue.aiAnalysis?.department || 'Municipality',
+      img: issue.imageReference || 'https://images.unsplash.com/photo-1594913785162-e6785382d355?w=100&q=80',
+      rawIssue: issue
+    }))
+    .filter(i => {
+      if (!searchQuery) return true;
+      const query = searchQuery.toLowerCase();
+      return (
+        i.id.toLowerCase().includes(query) ||
+        i.title.toLowerCase().includes(query) ||
+        i.reporter.toLowerCase().includes(query) ||
+        i.priority.toLowerCase().includes(query) ||
+        i.status.toLowerCase().includes(query) ||
+        i.dept.toLowerCase().includes(query) ||
+        (i.rawIssue?.location?.address || '').toLowerCase().includes(query)
+      );
+    });
 
   if (sortByConfidence) {
     recentIssues.sort((a, b) => {
@@ -371,29 +436,18 @@ export default function AdminDashboard() {
                               <img src={issue.img} alt="Incident Thumb" className="w-full h-full object-cover" />
                             </div>
                             <div>
-                              <h5 className="font-bold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors">{issue.title}</h5>
-                              <p className="text-[10px] text-slate-400 mt-1">Ticket ID: {issue.id} • By {issue.reporter}</p>
-                              {/* Community Verification Indicators */}
-                              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100/30 flex items-center gap-0.5">
-                                  🤝 Confidence: {issue.rawIssue?.verification?.confidence !== undefined ? issue.rawIssue.verification.confidence : 0}%
-                                </span>
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-100/30 flex items-center gap-0.5">
-                                  👍 Verified: {issue.rawIssue?.verification?.upvotes || 0}
-                                </span>
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-50 text-rose-600 rounded border border-rose-100/30 flex items-center gap-0.5">
-                                  👎 Invalid: {issue.rawIssue?.verification?.downvotes || 0}
-                                </span>
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded border border-purple-100/30 flex items-center gap-0.5">
-                                  ⚡ Impact: {issue.rawIssue?.impactScore !== undefined ? issue.rawIssue.impactScore : 10}/100
-                                </span>
+                              <h5 className="font-extrabold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors max-w-[280px] truncate">{issue.title}</h5>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-[10px] text-slate-450 font-bold uppercase tracking-wider bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/40">{issue.rawIssue?.aiAnalysis?.category || issue.rawIssue?.category || 'General'}</span>
+                                <span className="text-slate-300 font-light">•</span>
+                                <span className="text-[10px] text-slate-400 font-semibold">{issue.date}</span>
                               </div>
                             </div>
                           </td>
                           <td className="py-4">
                             <Badge status={issue.priority} />
                           </td>
-                          <td className="py-4 text-slate-500 font-bold">
+                          <td className="py-4 text-slate-500 font-extrabold text-[11px]">
                             {issue.dept}
                           </td>
                           <td className="py-4">
@@ -401,10 +455,10 @@ export default function AdminDashboard() {
                           </td>
                           <td className="py-4 text-right">
                             <button
-                              className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm cursor-pointer select-none transition-colors"
+                              className="px-4 py-2 text-xs font-black text-primary-blue bg-primary-light hover:bg-blue-100 rounded-xl border border-primary-blue/15 hover:border-primary-blue/30 cursor-pointer select-none transition-all duration-200"
                               onClick={() => handleManageTicket(issue)}
                             >
-                              Dispatch Task
+                              Manage
                             </button>
                           </td>
                         </tr>
@@ -579,41 +633,41 @@ export default function AdminDashboard() {
               ) : insights ? (
                 <div className="space-y-5">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 text-left select-none">
-                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase">Routing Precision</span>
-                      <h4 className="text-2xl font-black text-slate-800 mt-1">99.4%</h4>
-                      <p className="text-[9px] text-slate-400 mt-1">Tickets routed with zero manual touches.</p>
+                    <div className="p-4 bg-white border border-blue-100 shadow-sm rounded-2xl hover:shadow-md transition-all duration-300">
+                      <span className="text-[9px] font-bold text-slate-450 uppercase tracking-wider">Routing Precision</span>
+                      <h4 className="text-2xl font-black text-blue-600 mt-1.5">99.4%</h4>
+                      <p className="text-[9px] text-slate-400 mt-1 font-semibold">Tickets routed with zero manual touches.</p>
                     </div>
-                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase">Hotspot concentration</span>
-                      <h4 className="text-2xl font-black text-rose-600 mt-1 flex items-center gap-1">
+                    <div className="p-4 bg-white border border-rose-100 shadow-sm rounded-2xl hover:shadow-md transition-all duration-300">
+                      <span className="text-[9px] font-bold text-slate-450 uppercase tracking-wider">Hotspot concentration</span>
+                      <h4 className="text-2xl font-black text-rose-600 mt-1.5 flex items-center gap-1.5">
                         🔥 {insights.hotspot || 'N/A'}
                       </h4>
-                      <p className="text-[9px] text-slate-400 mt-1">Highest density of reports logged.</p>
+                      <p className="text-[9px] text-slate-400 mt-1 font-semibold">Highest density of reports logged.</p>
                     </div>
-                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase">Busy Department</span>
-                      <h4 className="text-2xl font-black text-blue-650 mt-1 line-clamp-1">
+                    <div className="p-4 bg-white border border-purple-100 shadow-sm rounded-2xl hover:shadow-md transition-all duration-300">
+                      <span className="text-[9px] font-bold text-slate-455 uppercase tracking-wider">Busy Department</span>
+                      <h4 className="text-2xl font-black text-purple-650 mt-1.5 line-clamp-1 flex items-center gap-1.5">
                         🏢 {insights.mostBusyDepartment || 'Roads'}
                       </h4>
-                      <p className="text-[9px] text-slate-400 mt-1">Receiving the highest task volume.</p>
+                      <p className="text-[9px] text-slate-400 mt-1 font-semibold">Receiving the highest task volume.</p>
                     </div>
                   </div>
 
-                  <div className="bg-gradient-to-br from-indigo-50/30 via-white to-slate-50/20 p-5 border border-indigo-100 rounded-2xl">
-                    <h4 className="font-extrabold text-sm text-indigo-900 font-title flex items-center gap-1.5">
+                  <div className="bg-gradient-to-br from-indigo-50/40 via-white to-slate-50/20 p-5.5 border-2 border-indigo-150 rounded-2xl shadow-sm hover:shadow-premium transition-all duration-300">
+                    <h4 className="font-extrabold text-sm text-indigo-900 font-title flex items-center gap-2">
                       💡 AI Insights Recommendation
                     </h4>
-                    <p className="text-xs text-slate-650 leading-relaxed mt-2.5 font-medium">
+                    <p className="text-xs sm:text-sm text-slate-650 leading-relaxed mt-3 font-semibold bg-white p-3.5 rounded-xl border border-indigo-100/50">
                       {insights.recommendation}
                     </p>
                   </div>
 
-                  <div className="bg-blue-50/10 p-5 border border-blue-100/50 rounded-2xl">
-                    <h4 className="font-extrabold text-sm text-blue-900 font-title flex items-center gap-1.5">
+                  <div className="bg-gradient-to-br from-blue-50/30 via-white to-slate-50/30 p-5.5 border border-blue-150 rounded-2xl shadow-sm hover:shadow-premium transition-all duration-300">
+                    <h4 className="font-extrabold text-sm text-blue-900 font-title flex items-center gap-2">
                       📈 City-Level Trend Analysis
                     </h4>
-                    <p className="text-xs text-slate-650 leading-relaxed mt-2.5 font-medium">
+                    <p className="text-xs sm:text-sm text-slate-650 leading-relaxed mt-3 font-semibold bg-white p-3.5 rounded-xl border border-blue-100/50">
                       {insights.trend || insights.summary}
                     </p>
                   </div>
@@ -698,8 +752,8 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* 4 Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {/* 5 Stats Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {stats.map((stat, idx) => {
                 const StatIcon = stat.icon;
                 return (
@@ -757,47 +811,36 @@ export default function AdminDashboard() {
                   </div>
 
                   <div className="overflow-x-auto no-scrollbar w-full">
-                    <table className="w-full text-left text-xs border-collapse min-w-[500px]">
+                    <table className="w-full text-left text-xs border-collapse min-w-[500px] select-none">
                       <thead>
-                        <tr className="border-b border-slate-100 text-slate-400 font-extrabold uppercase tracking-wider text-[10px] pb-4">
-                          <th className="pb-3 font-bold">Issue Details</th>
-                          <th className="pb-3 font-bold">Priority</th>
-                          <th className="pb-3 font-bold">Department</th>
-                          <th className="pb-3 font-bold">Status</th>
-                          <th className="pb-3 font-bold text-right">Actions</th>
+                        <tr className="border-b border-slate-100 text-slate-400 font-black uppercase tracking-widest text-[9px] pb-4">
+                          <th className="pb-4 pt-1 font-extrabold tracking-widest">Issue Details</th>
+                          <th className="pb-4 pt-1 font-extrabold tracking-widest">Priority</th>
+                          <th className="pb-4 pt-1 font-extrabold tracking-widest">Department</th>
+                          <th className="pb-4 pt-1 font-extrabold tracking-widest">Status</th>
+                          <th className="pb-4 pt-1 font-extrabold tracking-widest text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50 text-[11px] sm:text-xs">
                         {recentIssues.map((issue) => (
                           <tr key={issue.id} className="hover:bg-slate-50/50 transition-colors group">
-                            <td className="py-4.5 flex items-center gap-3.5">
+                            <td className="py-4 flex items-center gap-3.5">
                               <div className="w-11 h-11 rounded-xl overflow-hidden border border-slate-100 shadow-sm shrink-0">
                                 <img src={issue.img} alt="Incident Thumb" className="w-full h-full object-cover" />
                               </div>
                               <div>
-                                <h5 className="font-bold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors">{issue.title}</h5>
-                                <p className="text-[10px] text-slate-400 mt-1">By {issue.reporter} • {issue.date}</p>
-                                {/* Community Verification Indicators */}
-                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100/30 flex items-center gap-0.5">
-                                    🤝 Confidence: {issue.rawIssue?.verification?.confidence !== undefined ? issue.rawIssue.verification.confidence : 0}%
-                                  </span>
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-100/30 flex items-center gap-0.5">
-                                    👍 Verified: {issue.rawIssue?.verification?.upvotes || 0}
-                                  </span>
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-50 text-rose-600 rounded border border-rose-100/30 flex items-center gap-0.5">
-                                    👎 Invalid: {issue.rawIssue?.verification?.downvotes || 0}
-                                  </span>
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded border border-purple-100/30 flex items-center gap-0.5">
-                                    ⚡ Impact: {issue.rawIssue?.impactScore !== undefined ? issue.rawIssue.impactScore : 10}/100
-                                  </span>
+                                <h5 className="font-extrabold text-slate-800 text-xs sm:text-sm group-hover:text-primary-blue transition-colors max-w-[280px] truncate">{issue.title}</h5>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <span className="text-[10px] text-slate-450 font-bold uppercase tracking-wider bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/40">{issue.rawIssue?.aiAnalysis?.category || issue.rawIssue?.category || 'General'}</span>
+                                  <span className="text-slate-300 font-light">•</span>
+                                  <span className="text-[10px] text-slate-400 font-semibold">{issue.date}</span>
                                 </div>
                               </div>
                             </td>
                             <td className="py-4.5">
                               <Badge status={issue.priority} />
                             </td>
-                            <td className="py-4.5 text-slate-500 font-bold">
+                            <td className="py-4.5 text-slate-500 font-extrabold text-[11px]">
                               {issue.dept}
                             </td>
                             <td className="py-4.5">
@@ -805,10 +848,10 @@ export default function AdminDashboard() {
                             </td>
                             <td className="py-4.5 text-right">
                               <button
-                                className="px-3.5 py-2 text-xs font-bold text-primary-blue bg-primary-light hover:bg-blue-100 rounded-xl border border-primary-blue/10 cursor-pointer select-none transition-all"
+                                className="px-4 py-2 text-xs font-black text-primary-blue bg-primary-light hover:bg-blue-100 rounded-xl border border-primary-blue/15 hover:border-primary-blue/30 cursor-pointer select-none transition-all duration-200"
                                 onClick={() => handleManageTicket(issue)}
                               >
-                                Manage &gt;
+                                Manage
                               </button>
                             </td>
                           </tr>
@@ -866,41 +909,34 @@ export default function AdminDashboard() {
                       </div>
 
                       {/* Current Situation */}
-                      <div className="space-y-1.5 select-none">
+                      <div className="space-y-1.5 select-none text-left">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Current Situation</span>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-3 gap-2.5">
                           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">🔥 Hotspot Area</span>
-                            <span className="text-xs font-black text-slate-800 mt-1 block">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">🔥 Hotspot</span>
+                            <span className="text-xs font-black text-slate-800 mt-1 block truncate">
                               {insights.hotspot || 'N/A'}
                             </span>
                           </div>
 
                           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">📈 Most Reported Category</span>
-                            <span className="text-xs font-black text-slate-800 mt-1 block">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">📈 Top Category</span>
+                            <span className="text-xs font-black text-slate-800 mt-1 block truncate">
                               {insights.topCategory || 'N/A'}
                             </span>
                           </div>
 
                           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">⚠ Critical Issues Pending</span>
-                            <span className="text-xs font-black text-rose-600 mt-1 block">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">⚠ Critical</span>
+                            <span className="text-xs font-black text-rose-600 mt-1 block font-mono">
                               {insights.criticalIssues !== undefined ? insights.criticalIssues : 0} open
-                            </span>
-                          </div>
-
-                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">🏢 Busiest Department</span>
-                            <span className="text-xs font-black text-slate-800 mt-1 block">
-                              {insights.mostBusyDepartment || 'N/A'}
                             </span>
                           </div>
                         </div>
                       </div>
 
                       {/* Community Health */}
-                      <div className="space-y-1.5 select-none">
+                      <div className="space-y-1.5 select-none text-left">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Community Health</span>
                         <div className="grid grid-cols-3 gap-2">
                           <div className="bg-slate-50 p-2 rounded-xl border border-slate-100/80 text-center flex flex-col justify-center">
@@ -916,7 +952,7 @@ export default function AdminDashboard() {
                             </span>
                           </div>
                           <div className="bg-slate-50 p-2 rounded-xl border border-slate-100/80 text-center flex flex-col justify-center">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Resolved vs Pending</span>
+                            <span className="text-[8px] font-bold text-slate-450 uppercase tracking-wider block">Resolved vs Pending</span>
                             <span className="text-[10px] font-black text-slate-800 mt-0.5 block leading-tight">
                               {insights.resolvedCount || 0}R : {insights.pendingCount || 0}P
                             </span>
@@ -932,39 +968,62 @@ export default function AdminDashboard() {
                         </p>
                       </div>
 
-                      {/* Trend Indicators */}
-                      <div className="space-y-1.5 select-none">
-                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Trend Indicators</span>
-                        <div className="flex flex-wrap gap-1.5 text-[9px] font-bold">
-                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
-                            (insights.trend?.toLowerCase().includes('increase') || insights.executiveSummary?.toLowerCase().includes('increase') || insights.summary?.toLowerCase().includes('increase'))
-                              ? 'bg-amber-50 text-amber-700 border-amber-200 opacity-100'
-                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
-                          }`}>
-                            📈 Increasing
-                          </span>
-                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
-                            (insights.trend?.toLowerCase().includes('decrease') || insights.executiveSummary?.toLowerCase().includes('decrease') || insights.summary?.toLowerCase().includes('decrease'))
-                              ? 'bg-blue-50 text-blue-700 border-blue-200 opacity-100'
-                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
-                          }`}>
-                            📉 Decreasing
-                          </span>
-                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
-                            (insights.criticalIssues > 0)
-                              ? 'bg-rose-50 text-rose-700 border-rose-200 opacity-100'
-                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
-                          }`}>
-                            ⚠ Needs Attention
-                          </span>
-                          <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
-                            (parseInt(insights.resolutionRate || '0') >= 50)
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 opacity-100'
-                              : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
-                          }`}>
-                            ✅ Improving
-                          </span>
-                        </div>
+                      {/* Collapsible Technical Insights */}
+                      <div className="border-t border-slate-100 pt-3 text-left">
+                        <button
+                          type="button"
+                          onClick={() => setShowTechnicalInsights(!showTechnicalInsights)}
+                          className="text-[10px] font-black text-blue-600 hover:text-blue-700 flex items-center gap-1 uppercase tracking-widest cursor-pointer select-none bg-transparent border-0 p-0"
+                        >
+                          {showTechnicalInsights ? 'Hide Technical Trends ▲' : 'Show Technical Trends ▼'}
+                        </button>
+                        
+                        {showTechnicalInsights && (
+                          <div className="space-y-4 pt-3 mt-1.5 animate-fadeIn">
+                            {/* Busiest Department */}
+                            <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100/80 text-left">
+                              <span className="text-[8px] font-bold text-slate-450 uppercase tracking-wider block">🏢 Busiest Department</span>
+                              <span className="text-xs font-black text-slate-800 mt-1 block">
+                                {insights.mostBusyDepartment || 'N/A'}
+                              </span>
+                            </div>
+
+                            {/* Trend Indicators */}
+                            <div className="space-y-1.5 select-none text-left">
+                              <span className="text-[9px] font-black text-slate-450 uppercase tracking-wider block">Trend Indicators</span>
+                              <div className="flex flex-wrap gap-1.5 text-[9px] font-bold">
+                                <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                                  (insights.trend?.toLowerCase().includes('increase') || insights.executiveSummary?.toLowerCase().includes('increase') || insights.summary?.toLowerCase().includes('increase'))
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200 opacity-100'
+                                    : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                                }`}>
+                                  📈 Increasing
+                                </span>
+                                <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                                  (insights.trend?.toLowerCase().includes('decrease') || insights.executiveSummary?.toLowerCase().includes('decrease') || insights.summary?.toLowerCase().includes('decrease'))
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200 opacity-100'
+                                    : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                                }`}>
+                                  📉 Decreasing
+                                </span>
+                                <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                                  (insights.criticalIssues > 0)
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200 opacity-100'
+                                    : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                                }`}>
+                                  ⚠ Needs Attention
+                                </span>
+                                <span className={`px-2.5 py-0.5 rounded-full border transition-all ${
+                                  (parseInt(insights.resolutionRate || '0') >= 50)
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 opacity-100'
+                                    : 'bg-slate-50 text-slate-400 border-slate-100 opacity-50'
+                                }`}>
+                                  ✅ Improving
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                     </div>
@@ -1198,7 +1257,12 @@ export default function AdminDashboard() {
               type="text"
               placeholder="Search reports, locations, citizens..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value && currentTab !== 'Reports' && currentTab !== 'Community Map') {
+                  setCurrentTab('Reports');
+                }
+              }}
               className="w-full pl-10 pr-12 py-2.5 rounded-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-slate-700 bg-slate-50/50"
             />
             {/* Keyboard shortcut */}
@@ -1277,6 +1341,270 @@ export default function AdminDashboard() {
           {renderTabContent()}
         </main>
       </div>
+
+      {/* Side Drawer for progressive disclosure of Issue details */}
+      <AnimatePresence>
+        {selectedIssueForDrawer && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.4 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedIssueForDrawer(null)}
+              className="fixed inset-0 bg-slate-900 z-50 cursor-pointer"
+            />
+            {/* Drawer Body */}
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed right-0 top-0 bottom-0 w-full max-w-lg bg-white shadow-2xl z-50 flex flex-col h-full border-l border-slate-100 select-none overflow-hidden"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <span className="text-[10px] font-mono text-slate-400 block tracking-wider uppercase font-black">
+                    Ticket details • {selectedIssueForDrawer.id}
+                  </span>
+                  <h3 className="text-base font-extrabold text-slate-900 mt-1 font-title max-w-[360px] truncate">
+                    {selectedIssueForDrawer.title}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedIssueForDrawer(null)}
+                  className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Scrollable details */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 text-left">
+                {/* Media preview */}
+                <div className="w-full h-48 rounded-2xl overflow-hidden border border-slate-150 relative shadow-sm shrink-0 bg-slate-50">
+                  <img 
+                    src={selectedIssueForDrawer.img} 
+                    alt="Incident Capture" 
+                    className="w-full h-full object-cover" 
+                  />
+                  <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md text-white font-mono text-[9px] px-2 py-0.5 rounded border border-white/10">
+                    Image Evidence
+                  </div>
+                </div>
+
+                {/* Status and Priority badges */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Priority Level</span>
+                    <Badge status={selectedIssueForDrawer.priority} />
+                  </div>
+                  <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Workflow Status</span>
+                    <Badge status={selectedIssueForDrawer.status} />
+                  </div>
+                </div>
+
+                {/* AI Classification Details */}
+                <div className="space-y-4">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                    🤖 AI Analysis & Routing
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Responsible Department</span>
+                      <span className="font-extrabold text-slate-900 mt-1 block font-title">{selectedIssueForDrawer.dept}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Category Match</span>
+                      <span className="font-extrabold text-slate-900 mt-1 block capitalize">
+                        {selectedIssueForDrawer.rawIssue?.aiAnalysis?.category || selectedIssueForDrawer.rawIssue?.category || 'General'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-indigo-50/30 border border-indigo-100/40 p-4 rounded-xl space-y-1.5">
+                    <span className="text-[9px] font-black text-indigo-700 uppercase tracking-wider block">Complete AI Summary</span>
+                    <p className="text-xs text-slate-650 leading-relaxed font-semibold">
+                      {selectedIssueForDrawer.rawIssue?.aiAnalysis?.summary || selectedIssueForDrawer.rawIssue?.description || 'Awaiting dispatch verification.'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Citizen Context */}
+                <div className="space-y-4">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                    👤 Citizen Description & Metadata
+                  </h4>
+                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-xl space-y-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Citizen Notes</span>
+                    <p className="text-xs text-slate-650 leading-relaxed font-semibold italic">
+                      "{selectedIssueForDrawer.rawIssue?.description || 'No additional notes logged.'}"
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Reported By</span>
+                      <span className="font-extrabold text-slate-800 mt-1 block">{selectedIssueForDrawer.reporter}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Date & Time Logged</span>
+                      <span className="font-extrabold text-slate-800 mt-1 block">
+                        {selectedIssueForDrawer.rawIssue?.createdAt ? new Date(selectedIssueForDrawer.rawIssue.createdAt).toLocaleString() : 'Recent'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Peer Review & Validation Stats */}
+                <div className="space-y-4">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                    🤝 Community Peer Validation
+                  </h4>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase block">Confidence</span>
+                      <span className="text-sm font-black text-indigo-600 mt-1 block">
+                        {selectedIssueForDrawer.rawIssue?.verification?.confidence !== undefined ? selectedIssueForDrawer.rawIssue.verification.confidence : 0}%
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                      <span className="text-[8px] font-bold text-slate-450 uppercase block">Upvotes</span>
+                      <span className="text-sm font-black text-emerald-600 mt-1 block">
+                        👍 {selectedIssueForDrawer.rawIssue?.verification?.upvotes || 0}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                      <span className="text-[8px] font-bold text-slate-455 uppercase block">Downvotes</span>
+                      <span className="text-sm font-black text-rose-600 mt-1 block">
+                        👎 {selectedIssueForDrawer.rawIssue?.verification?.downvotes || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* GPS Coordinates */}
+                <div className="space-y-3">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                    📍 Geographic Coordinates
+                  </h4>
+                  <div className="bg-slate-50 border border-slate-100 p-4.5 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-start gap-1.5">
+                      <span className="text-sm">📍</span>
+                      <span className="font-extrabold text-slate-800 leading-snug">
+                        {selectedIssueForDrawer.rawIssue?.location?.address || 'Unknown Address'}
+                      </span>
+                    </div>
+                    {selectedIssueForDrawer.rawIssue?.location?.coords && (
+                      <div className="font-mono text-[10px] text-slate-500 pt-1.5 border-t border-slate-100 flex justify-between">
+                        <span>Latitude: {selectedIssueForDrawer.rawIssue.location.coords.latitude.toFixed(6)}</span>
+                        <span>Longitude: {selectedIssueForDrawer.rawIssue.location.coords.longitude.toFixed(6)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Ticket Timeline */}
+                {selectedIssueForDrawer.rawIssue?.timeline && selectedIssueForDrawer.rawIssue.timeline.length > 0 && (
+                  <div className="space-y-4">
+                    <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                      📅 Ticket Action Timeline
+                    </h4>
+                    <div className="relative border-l border-slate-150 pl-4.5 ml-2.5 space-y-4">
+                      {selectedIssueForDrawer.rawIssue.timeline.map((item, idx) => (
+                        <div key={idx} className="relative text-xs">
+                          <span className="absolute -left-[22.5px] top-1 w-2 h-2 rounded-full bg-blue-600 ring-4 ring-white" />
+                          <div className="flex justify-between items-center">
+                            <span className="font-extrabold text-slate-900">{item.title}</span>
+                            <span className="text-[10px] text-slate-400 font-semibold">
+                              {new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{item.description}</p>
+                          <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded mt-1.5 inline-block font-bold">
+                            By {item.actor}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Area footer */}
+              <div className="p-6 border-t border-slate-100 bg-slate-50/50">
+                {(() => {
+                  const nextStatuses = {
+                    'Reported': 'Assigned',
+                    'AI Verified': 'Assigned',
+                    'Awaiting Clarification': 'Assigned',
+                    'Assigned': 'In Progress',
+                    'In Progress': 'Resolved',
+                    'Resolved': 'AI Verified'
+                  };
+                  const next = nextStatuses[selectedIssueForDrawer.status] || 'Assigned';
+                  return (
+                    <div className="flex flex-col gap-3">
+                      <button
+                        onClick={async () => {
+                          const confirm = window.confirm(`Transition ticket ${selectedIssueForDrawer.id} from "${selectedIssueForDrawer.status}" to "${next}"?`);
+                          if (confirm) {
+                            await handleUpdateStatus(selectedIssueForDrawer.issueId, next);
+                            // Get the updated issue data from allIssues/recentIssues list to keep drawer synced
+                            const updated = allIssues.find(i => i.issueId === selectedIssueForDrawer.issueId);
+                            if (updated) {
+                              const formatted = {
+                                id: updated.trackingId || 'CM-XXXX',
+                                issueId: updated.issueId,
+                                title: updated.aiAnalysis?.summary || updated.description || 'Quick Report',
+                                reporter: updated.reportedBy?.displayName || 'Citizen',
+                                date: formatTimeAgo(updated.createdAt),
+                                priority: updated.aiAnalysis?.severity || 'Medium',
+                                status: updated.status || 'Reported',
+                                dept: updated.aiAnalysis?.department || 'Municipality',
+                                img: updated.imageReference || 'https://images.unsplash.com/photo-1594913785162-e6785382d365?w=100&q=80',
+                                rawIssue: updated
+                              };
+                              setSelectedIssueForDrawer(formatted);
+                            } else {
+                              setSelectedIssueForDrawer(null);
+                            }
+                            showToast(`Ticket status successfully transitioned to "${next}"!`, 'success');
+                          }
+                        }}
+                        className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-650 hover:from-blue-750 hover:to-indigo-750 text-white rounded-2xl text-xs font-black shadow-md hover:shadow-lg hover:scale-[1.01] transition-all cursor-pointer flex items-center justify-center gap-2 border-0"
+                      >
+                        ⚡ Transition to "{next}"
+                      </button>
+                      <button
+                        onClick={() => setSelectedIssueForDrawer(null)}
+                        className="w-full py-3.5 bg-white hover:bg-slate-50 text-slate-750 rounded-2xl text-xs font-black border border-slate-200 cursor-pointer text-center"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Toast Notification Container */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-55 animate-slideUp">
+          <div className={`flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-xs font-bold ${
+            toast.type === 'error'
+              ? 'bg-rose-50 text-rose-700 border-rose-100'
+              : 'bg-emerald-50 text-emerald-700 border-emerald-100'
+          }`}>
+            {toast.type === 'error' ? '❌' : '✅'} {toast.message}
+          </div>
+        </div>
+      )}
 
     </div>
   );
